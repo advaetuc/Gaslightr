@@ -1,0 +1,1 @@
+Building a native Adobe Photoshop hybrid plugin (UXP Frontend + C++ Native Backend) that implements NVIDIA's DLSS 5 Neural Rendering pipeline for static 2D images. Bypassing the standard game-engine temporal requirements by spoofing 3D pipeline data (depth, motion vectors, camera jitter).
