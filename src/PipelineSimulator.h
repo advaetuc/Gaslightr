@@ -133,6 +133,7 @@ public:
 private:
     DX12Context& m_ctx;
     SyntheticResources m_synth;
+    bool m_consumed = false;
 
     // ── Internal: fill a GPU texture via upload buffer ────────────────────
     DX12Result CreateAndFillTexture(

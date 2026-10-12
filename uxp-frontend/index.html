@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <main>
+    <h2>Gaslightr</h2><sp-body size="s">Local neural enhancement</sp-body>
+    <div id="controls"></div>
+    <label>NR Style <select id="style"><option value="default">Default</option><option value="natural">Natural</option><option value="cinematic">Cinematic</option></select></label>
+    <sp-body size="s">Styles control the strength of the enhancement blend.</sp-body>
+    <label>DLSS Performance Preset <select id="preset"><option value="0">Quality</option><option value="1">Balanced</option><option value="2">Performance</option></select></label>
+    <sp-checkbox id="detailOnly">Detail-Only · CIELAB chroma preservation</sp-checkbox>
+    <sp-body id="detailStatus" size="s"></sp-body>
+    <canvas id="preview" width="320" height="240" aria-label="Enhancement preview. Drag to compare before and after."></canvas>
+    <sp-body size="s">Drag to compare · preview uses a full-resolution center crop</sp-body>
+    <div class="actions"><sp-button id="refresh" variant="secondary">Preview</sp-button><sp-button id="apply" variant="cta">Enhance layer</sp-button><sp-button id="cancel" variant="secondary" disabled>Cancel</sp-button></div>
+    <sp-body id="status" role="status" aria-live="polite">Ready</sp-body>
+  </main>
+  <script src="index.jsx"></script>
+</body></html>

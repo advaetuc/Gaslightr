@@ -155,7 +155,8 @@ DX12Result PipelineSimulator::CreateDefaultTexture(
     texDesc.SampleDesc.Count   = 1;
     texDesc.SampleDesc.Quality = 0;
     texDesc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    texDesc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+    texDesc.Flags              = format == DXGI_FORMAT_R16G16B16A16_FLOAT
+        ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
 
     HRESULT hr = m_ctx.GetDevice()->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE,
@@ -258,8 +259,8 @@ DX12Result PipelineSimulator::CreateAndFillTexture(
 
     // ── Record + execute CopyTextureRegion ───────────────────────────────
     {
-        m_ctx.GetCommandAllocator()->Reset();
-        m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr);
+        if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset)) return DX12Result::Fail(reset, L"Command allocator reset failed.");
+        if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset)) return DX12Result::Fail(reset, L"Command list reset failed.");
 
         D3D12_TEXTURE_COPY_LOCATION srcLoc{};
         srcLoc.pResource = outUpload.Get();
@@ -286,10 +287,10 @@ DX12Result PipelineSimulator::CreateAndFillTexture(
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
                 | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        m_ctx.GetCommandList()->Close();
+        if (const HRESULT close = m_ctx.GetCommandList()->Close(); FAILED(close)) return DX12Result::Fail(close, L"Command list close failed.");
         ID3D12CommandList* lists[] = { m_ctx.GetCommandList() };
         m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
-        m_ctx.WaitForGPU();
+        if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
     }
 
     return DX12Result::Success();
@@ -479,8 +480,8 @@ DX12Result PipelineSimulator::UpdateMotionVectors(
     m_synth.motionUpload->Unmap(0, &writtenRange);
 
     // ── Copy upload → motion vector texture ──────────────────────────────
-    m_ctx.GetCommandAllocator()->Reset();
-    m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr);
+    if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset)) return DX12Result::Fail(reset, L"Command allocator reset failed.");
+    if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset)) return DX12Result::Fail(reset, L"Command list reset failed.");
 
     // Transition MV texture to COPY_DEST.
     TransitionBarrier(
@@ -514,10 +515,10 @@ DX12Result PipelineSimulator::UpdateMotionVectors(
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
             | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    m_ctx.GetCommandList()->Close();
+    if (const HRESULT close = m_ctx.GetCommandList()->Close(); FAILED(close)) return DX12Result::Fail(close, L"Command list close failed.");
     ID3D12CommandList* lists[] = { m_ctx.GetCommandList() };
     m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
-    m_ctx.WaitForGPU();
+    if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
 
     return DX12Result::Success();
 }
@@ -569,11 +570,25 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
             L"ExecuteFullPipeline — null argument.");
     }
 
+    *ppOutputTexture = nullptr;
+    if (m_consumed) {
+        return DX12Result::Fail(E_NOT_VALID_STATE, L"Allocate fresh synthetic resources before processing another tile.");
+    }
+    if (config.warmupFrames < 24 || config.warmupFrames > 32 ||
+        config.enhancePasses < 1 || config.enhancePasses > 4) {
+        return DX12Result::Fail(E_INVALIDARG, L"Expected 24-32 warmup frames and 1-4 enhancement passes.");
+    }
+    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    // Each resource set is single-use: AllocateSyntheticResources resets states
+    // before another tile. The DLL contract must preserve caller-owned states.
+
     NeuralBackend& backend = NeuralBackend::GetInstance();
     if (!backend.IsReady()) {
         return DX12Result::Fail(E_NOT_VALID_STATE,
             L"NeuralBackend is not ready.");
     }
+    m_consumed = true;
 
     const uint32_t w = m_synth.width;
     const uint32_t h = m_synth.height;
@@ -606,8 +621,8 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         }
 
         // ── Record the evaluate command ──────────────────────────────────
-        m_ctx.GetCommandAllocator()->Reset();
-        m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr);
+        if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset)) return DX12Result::Fail(reset, L"Command allocator reset failed.");
+        if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset)) return DX12Result::Fail(reset, L"Command list reset failed.");
 
         NVNGX_EvaluationInputs inputs{};
         inputs.pColorInput      = pInputTexture;
@@ -621,6 +636,9 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         inputs.FrameIndex       = frame;
         inputs.ResetHistory     = (frame == 0);  // "Force clear on frame 0"
 
+        TransitionBarrier(m_ctx.GetCommandList(), m_synth.pingTexture.Get(),
+            frame == 0 ? D3D12_RESOURCE_STATE_COMMON : readable,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         auto evalResult = backend.Evaluate(
             m_ctx.GetCommandList(),
             &inputs,
@@ -633,13 +651,15 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
             return DX12Result::Fail(evalResult.hr, msg);
         }
 
+        TransitionBarrier(m_ctx.GetCommandList(), m_synth.pingTexture.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable);
         // ── Execute + wait (mandatory per-frame sync) ────────────────────
         //  "Block execution thread until GPU pass completes before
         //   starting the next frame." — blueprint §Component C
-        m_ctx.GetCommandList()->Close();
+        if (const HRESULT close = m_ctx.GetCommandList()->Close(); FAILED(close)) return DX12Result::Fail(close, L"Command list close failed.");
         ID3D12CommandList* lists[] = { m_ctx.GetCommandList() };
         m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
-        m_ctx.WaitForGPU();
+        if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
     }
 
     OutputDebugStringW(
@@ -681,8 +701,8 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
             if (!mvResult) return mvResult;
         }
 
-        m_ctx.GetCommandAllocator()->Reset();
-        m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr);
+        if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset)) return DX12Result::Fail(reset, L"Command allocator reset failed.");
+        if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset)) return DX12Result::Fail(reset, L"Command list reset failed.");
 
         NVNGX_EvaluationInputs inputs{};
         inputs.pColorInput      = currentInput;
@@ -695,6 +715,9 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         inputs.FrameIndex       = config.warmupFrames + pass;
         inputs.ResetHistory     = false;  // Never reset during enhancement.
 
+        TransitionBarrier(m_ctx.GetCommandList(), currentOutput,
+            pass == 0 ? D3D12_RESOURCE_STATE_COMMON : readable,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         auto evalResult = backend.Evaluate(
             m_ctx.GetCommandList(),
             &inputs,
@@ -707,10 +730,12 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
             return DX12Result::Fail(evalResult.hr, msg);
         }
 
-        m_ctx.GetCommandList()->Close();
+        TransitionBarrier(m_ctx.GetCommandList(), currentOutput,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable);
+        if (const HRESULT close = m_ctx.GetCommandList()->Close(); FAILED(close)) return DX12Result::Fail(close, L"Command list close failed.");
         ID3D12CommandList* lists[] = { m_ctx.GetCommandList() };
         m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
-        m_ctx.WaitForGPU();
+        if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
 
         // ── Swap ping ↔ pong for the next pass ──────────────────────────
         ID3D12Resource* temp = currentInput;
@@ -733,6 +758,7 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
 // ═════════════════════════════════════════════════════════════════════════════
 void PipelineSimulator::ReleaseSyntheticResources()
 {
+    m_consumed = false;
     // Must flush before releasing any GPU resources.
     if (m_synth.valid) {
         m_ctx.WaitForGPU();

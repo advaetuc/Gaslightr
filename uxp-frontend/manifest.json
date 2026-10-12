@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 5,
+  "id": "com.advaet.gaslightr",
+  "name": "Gaslightr",
+  "version": "0.2.0",
+  "main": "index.html",
+  "addon": { "name": "gaslightr.uxpaddon" },
+  "host": { "app": "PS", "minVersion": "25.0.0", "data": { "apiVersion": 2 } },
+  "requiredPermissions": { "enableAddon": true, "localFileSystem": "plugin" },
+  "entrypoints": [{
+    "type": "panel", "id": "gaslightr", "label": { "default": "Gaslightr" },
+    "minimumSize": { "width": 300, "height": 580 },
+    "preferredDockedSize": { "width": 340, "height": 720 },
+    "preferredFloatingSize": { "width": 380, "height": 760 }
+  }]
+}

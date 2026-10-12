@@ -32,6 +32,18 @@
 
 namespace Gaslightr {
 
+// SEH must live in leaf functions without C++ objects requiring unwinding.
+static int InvokeInitialize(PFN_NVNGX_INITIALIZE_NR fn, ID3D12Device* device,
+    NVNGX_InitializationParams* params, DWORD* exception) noexcept {
+    __try { return fn(device, params); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *exception = GetExceptionCode(); return 0; }
+}
+static int InvokeEvaluate(PFN_NVNGX_EVALUATE_NR fn, ID3D12GraphicsCommandList* list,
+    NVNGX_EvaluationInputs* inputs, ID3D12Resource* output, DWORD* exception) noexcept {
+    __try { return fn(list, inputs, output); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *exception = GetExceptionCode(); return 0; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Expected export names from nvngx_dlssnr.dll
 //
@@ -177,21 +189,17 @@ bool NeuralBackend::Initialize(
     //  the DLL's internal struct layout doesn't match our definition.
     //  This is the "Fallback Safety Net" from the blueprint.
     //
-    int initResult = 0;
-
-    __try {
-        initResult = m_pfnInitNR(pDevice, pInitParams);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        DWORD exCode = GetExceptionCode();
+    DWORD exCode = 0;
+    const int initResult = InvokeInitialize(m_pfnInitNR, pDevice, pInitParams, &exCode);
+    if (exCode != 0) {
         wchar_t msg[512];
         swprintf_s(msg,
             L"InitializeNR threw a structured exception (code 0x%08lX).  "
             L"The DLL's internal struct layout likely mismatches our "
             L"NVNGX_InitializationParams definition.",
             exCode);
-        m_lastError = msg;
         Shutdown();
+        m_lastError = msg;
         return false;
     }
 
@@ -243,13 +251,10 @@ DX12Result NeuralBackend::Evaluate(
             L"NeuralBackend::Evaluate — EvaluateNR pointer is null.");
     }
 
-    int evalResult = 0;
-
-    __try {
-        evalResult = m_pfnEvalNR(pCmdList, pInputs, pOutputSurface);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        DWORD exCode = GetExceptionCode();
+    DWORD exCode = 0;
+    const int evalResult = InvokeEvaluate(m_pfnEvalNR, pCmdList, pInputs, pOutputSurface, &exCode);
+    if (exCode != 0) {
+        m_ready.store(false, std::memory_order_release);
         wchar_t msg[512];
         swprintf_s(msg,
             L"EvaluateNR threw a structured exception (code 0x%08lX).  "

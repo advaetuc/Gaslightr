@@ -382,9 +382,14 @@ DX12Result DX12Context::WaitForGPU()
             return DX12Result::Fail(hr,
                 L"ID3D12Fence::SetEventOnCompletion failed.");
         }
-        ::WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
+        const DWORD waitResult = ::WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
+        if (waitResult != WAIT_OBJECT_0) {
+            return DX12Result::Fail(HRESULT_FROM_WIN32(::GetLastError()), L"GPU fence wait failed.");
+        }
     }
 
+    const HRESULT removed = m_device->GetDeviceRemovedReason();
+    if (FAILED(removed)) return DX12Result::Fail(removed, L"Graphics device was removed during processing.");
     return DX12Result::Success();
 }
 

@@ -508,6 +508,10 @@ DX12Result MemoryBridge::ReadbackFromGPU(
 
     pCmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
 
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    pCmdList->ResourceBarrier(1, &barrier);
     return DX12Result::Success();
 }
 

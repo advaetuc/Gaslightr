@@ -1,116 +1,56 @@
-# =============================================================================
-# Gaslightr — Headless DLSS 5 Neural Rendering Plugin for Adobe Photoshop
-# CMakeLists.txt — Phase 1–3: DX12 + Neural Backend + Memory + Temporal Sim
-# =============================================================================
 cmake_minimum_required(VERSION 3.20)
-project(Gaslightr
-    VERSION   0.1.0
-    LANGUAGES CXX
-)
-
-# ── Target platform guard ────────────────────────────────────────────────────
-if(NOT WIN32)
-    message(FATAL_ERROR "Gaslightr targets Windows x64 exclusively.")
+project(Gaslightr VERSION 0.2.0 LANGUAGES CXX)
+if(NOT WIN32 OR NOT MSVC)
+    message(FATAL_ERROR "Gaslightr requires Windows x64 and MSVC.")
 endif()
-
-# ── Compiler requirements ────────────────────────────────────────────────────
-set(CMAKE_CXX_STANDARD          20)
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Select an x64 generator (cmake -A x64).")
+endif()
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS        OFF)
-
-# Force x64 architecture on MSVC generators
-if(MSVC)
-    set(CMAKE_GENERATOR_PLATFORM "x64" CACHE STRING "" FORCE)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+function(gaslightr_compile target)
+    target_include_directories(${target} PRIVATE src include)
+    target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(${target} PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /MP /GR- /EHsc /utf-8)
+endfunction()
+add_library(GaslightrCore STATIC src/DX12Context.cpp src/NeuralBackend.cpp
+    src/MemoryBridge.cpp src/PipelineSimulator.cpp src/TileProcessor.cpp)
+gaslightr_compile(GaslightrCore)
+target_link_libraries(GaslightrCore PUBLIC d3d12 dxgi dxguid Advapi32)
+option(GASLIGHTR_BUILD_HARNESS "Build the original registry-writing diagnostic executable" OFF)
+if(GASLIGHTR_BUILD_HARNESS)
+    add_executable(Gaslightr src/main.cpp)
+    gaslightr_compile(Gaslightr)
+    target_link_libraries(Gaslightr PRIVATE GaslightrCore)
 endif()
-
-# ── SDK paths (user-configurable) ────────────────────────────────────────────
-# Point this at the root of your local NVIDIA NGX SDK installation.
-# The SDK is expected to contain:
-#   <NGX_SDK_PATH>/include/nvsdk_ngx.h
-#   <NGX_SDK_PATH>/lib/x64/nvsdk_ngx_d.lib   (debug)  — optional
-#   <NGX_SDK_PATH>/lib/x64/nvsdk_ngx_s.lib   (static) — optional
-# NOTE: In Phase 4 we dynamically load nvngx.dll via GetProcAddress,
-# so a static link library is NOT strictly required for runtime.  The
-# include path is needed for type definitions only.
-set(NGX_SDK_PATH "" CACHE PATH
-    "Path to the NVIDIA NGX SDK root (contains include/ and lib/)")
-
-# ── Source files ─────────────────────────────────────────────────────────────
-set(GASLIGHTR_SOURCES
-    src/main.cpp
-    src/DX12Context.cpp
-    src/NeuralBackend.cpp
-    src/MemoryBridge.cpp
-    src/PipelineSimulator.cpp
-)
-
-set(GASLIGHTR_HEADERS
-    src/DX12Context.h
-    src/NeuralBackend.h
-    src/MemoryBridge.h
-    src/PipelineSimulator.h
-    include/nvngx_dlssnr_core.h
-)
-
-# ── Executable (Phase 1 is a headless console test harness) ──────────────────
-add_executable(${PROJECT_NAME}
-    ${GASLIGHTR_SOURCES}
-    ${GASLIGHTR_HEADERS}
-)
-
-# ── Include directories ─────────────────────────────────────────────────────
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-if(NGX_SDK_PATH)
-    target_include_directories(${PROJECT_NAME} PRIVATE
-        ${NGX_SDK_PATH}/include
-    )
+option(GASLIGHTR_BUILD_NODE_BINDING "Build the Node diagnostic addon (not a UXP addon)" OFF)
+set(NODE_API_INCLUDE_DIR "" CACHE PATH "Directory containing official node_api.h")
+set(NODE_IMPORT_LIBRARY "" CACHE FILEPATH "Official x64 node.lib matching the test Node runtime")
+if(GASLIGHTR_BUILD_NODE_BINDING)
+    if(NOT EXISTS "${NODE_API_INCLUDE_DIR}/node_api.h" OR NOT EXISTS "${NODE_IMPORT_LIBRARY}")
+        message(FATAL_ERROR "Set NODE_API_INCLUDE_DIR and NODE_IMPORT_LIBRARY. See docs/SDK_SETUP.md.")
+    endif()
+    add_library(GaslightrNode MODULE src/NodeBinding.cpp)
+    gaslightr_compile(GaslightrNode)
+    target_include_directories(GaslightrNode SYSTEM PRIVATE "${NODE_API_INCLUDE_DIR}")
+    target_link_libraries(GaslightrNode PRIVATE GaslightrCore "${NODE_IMPORT_LIBRARY}")
+    set_target_properties(GaslightrNode PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME "gaslightr")
 endif()
-
-# ── Link libraries ───────────────────────────────────────────────────────────
-# DirectX 12 / DXGI — provided by the Windows SDK, no find_package needed.
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    d3d12.lib
-    dxgi.lib
-    dxguid.lib        # GUIDs for debug / info queue interfaces
-    Advapi32.lib      # RegSetKeyValue / RegCreateKeyEx for registry bypass
-)
-
-# ── Compiler flags (MSVC) ────────────────────────────────────────────────────
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        /W4             # High warning level
-        /WX             # Treat warnings as errors
-        /permissive-    # Strict standards conformance
-        /Zc:__cplusplus # Report correct __cplusplus value
-        /MP             # Multi-process compilation
-        /GR-            # Disable RTTI — not needed; saves binary size
-        /EHsc           # Standard C++ exception handling
-        /utf-8          # Source and execution charset = UTF-8
-    )
-
-    # Static CRT linkage — avoids shipping vcruntime140.dll alongside the plugin.
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        WIN32_LEAN_AND_MEAN     # Trim rarely-used Win32 headers
-        NOMINMAX                # Prevent <windows.h> min/max macros
-        UNICODE
-        _UNICODE
-        _CRT_SECURE_NO_WARNINGS # Allow standard CRT functions
-    )
-
-    # Release optimizations
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:/O2 /Ob2 /Oi /Ot /GL>
-    )
-    target_link_options(${PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
-    )
+option(GASLIGHTR_CHECK_PHOTOSHOP_SDK "Compile-check the SDK messaging entry point (no PiPL packaging)" OFF)
+set(PHOTOSHOP_SDK_INCLUDE_DIRS "" CACHE STRING "Semicolon-separated Photoshop SDK include directories")
+if(GASLIGHTR_CHECK_PHOTOSHOP_SDK)
+    if(NOT PHOTOSHOP_SDK_INCLUDE_DIRS)
+        message(FATAL_ERROR "Set PHOTOSHOP_SDK_INCLUDE_DIRS from your installed Adobe SDK.")
+    endif()
+    add_library(GaslightrPhotoshopMessaging OBJECT src/PhotoshopMessaging.cpp)
+    gaslightr_compile(GaslightrPhotoshopMessaging)
+    target_include_directories(GaslightrPhotoshopMessaging SYSTEM PRIVATE ${PHOTOSHOP_SDK_INCLUDE_DIRS})
 endif()
-
-# ── Installation (future phases) ─────────────────────────────────────────────
-# install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(GaslightrContractTests tests/PixelContractTests.cpp)
+    gaslightr_compile(GaslightrContractTests)
+    add_test(NAME PixelContract COMMAND GaslightrContractTests)
+endif()

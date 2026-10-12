@@ -1,0 +1,10 @@
+{
+  "name": "gaslightr",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/frontend.test.js",
+    "test:native": "node --test tests/native.test.js"
+  },
+  "engines": { "node": ">=20" }
+}

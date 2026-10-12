@@ -1,0 +1,4 @@
+/build/
+/uxp-frontend/win/
+/vendor/
+*.pdb
