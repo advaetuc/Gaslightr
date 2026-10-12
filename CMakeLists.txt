@@ -1,6 +1,6 @@
 # =============================================================================
 # Gaslightr — Headless DLSS 5 Neural Rendering Plugin for Adobe Photoshop
-# CMakeLists.txt — Phase 1+2: DX12 Environment, Neural Backend, Memory Bridge
+# CMakeLists.txt — Phase 1–3: DX12 + Neural Backend + Memory + Temporal Sim
 # =============================================================================
 cmake_minimum_required(VERSION 3.20)
 project(Gaslightr
@@ -41,12 +41,14 @@ set(GASLIGHTR_SOURCES
     src/DX12Context.cpp
     src/NeuralBackend.cpp
     src/MemoryBridge.cpp
+    src/PipelineSimulator.cpp
 )
 
 set(GASLIGHTR_HEADERS
     src/DX12Context.h
     src/NeuralBackend.h
     src/MemoryBridge.h
+    src/PipelineSimulator.h
     include/nvngx_dlssnr_core.h
 )
 
