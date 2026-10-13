@@ -6,11 +6,11 @@ This root file is the authoritative engineering handoff. `docs/GASLIGHTR_AGENT_C
 
 ## 1. Current milestone and next decision
 
-Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 **GPU validation copy** pipeline. It does not currently perform neural inference or local enhancement in the active mode.
+Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 **GPU validation copy** pipeline. Neural inference remains gated OFF (`neuralInference: false`).
 
-The user previously confirmed a successful Photoshop canvas run, seam inspection, and single-step undo/redo. Subsequent preview and writeback regressions reopened acceptance for the current frontend revision. The latest output-verification patch has **25 passing frontend tests**, but has **not yet been confirmed in Photoshop**. Do not equate mock tests or the earlier live run with acceptance of the latest revision.
+Phase 8A (Local Enhancement Mode) is now implemented in the frontend: the non-neural 7×7 box high-pass structure filter, controllable NR Intensity blend, and edge feathering operate on top of the validated D3D12/core transport. The frontend exposes a selectable Mode dropdown offering both **Local Enhancement** and **GPU Validation** (raw D3D12 copy diagnostic mode). All **26 frontend automated tests pass**.
 
-Current instruction: maintain this handoff and await the user's choice of Phase 8A or Phase 8B. Neither phase has been started by this documentation update. Before declaring either phase accepted, reconfirm preview, populated output, and rollback in the current frontend.
+Current instruction: Execute live in-canvas retest in Photoshop 2024 to verify the updated preview divider and writeback, then proceed to Phase 8B edge-case stress testing.
 
 ## 2. Environment and operational restrictions
 
@@ -146,13 +146,14 @@ Installed SDK 0.1.0 uses manifest schema 6 in this tested setup. Do not revert t
 
 ## 7. Frontend regressions and latest patch
 
-The panel uses vanilla JS with Spectrum components, a scrollable body and visible status area. Current mode displays **GPU validation** and **Create validation layer**; enhancement controls are unavailable and CPU blending is bypassed.
+The panel uses vanilla JS with Spectrum components, structured into 5 logical cards (Mode Banner, Preview Card, Enhancement Parameters, Action Buttons, and Diagnostic Logs) inside a smoothly scrolling container (`overflow-y: auto`, 14px gutters). Base manifest dimensions are expanded (`minimumSize`: 340×620, `preferredDockedSize`: 380×780, `preferredFloatingSize`: 420×840) to prevent cramped host docking.
 
-### Preview
+### Preview and Split Comparison
 
-The host rejected `context.createImageData()`. Preview now renders through an image element and ImageBlob, not canvas ImageData. `pixels.displayBytes` converts linear RGB to sRGB display encoding, clamps/rounds to 0–255, and quantizes alpha separately without RGB gamma. Document data remains float32.
-
-`preview-image.js` copies into an exact-size owned Uint8Array and first passes `uint8.buffer` with `componentSize: 8`. The repository also retries a Uint8Array view **only** for the observed “Invalid type of arrayBuffer argument” error, reflecting the API table/example discrepancy encountered during bring-up. Do not simplify this to an assertion that every host universally rejects typed arrays. Only the 8-bit preview path is implemented here; broader constructor support has not been host-validated. Object URLs are revoked on replacement/clear/unload and failed assignment.
+The host rejected `context.createImageData()`. Preview renders dual `ImageBlob` instances (`previewBefore` and `preview` after) with linear-to-sRGB display encoding (`pixels.displayBytes`). The Preview Card uses a high-contrast before/after comparison stage:
+- **Divider & Handle:** 2px high-contrast vertical rule (`#ffffff` with dark drop-shadow) and a centered 32px circular pill handle (`#ffffff` with `#1473e6` border and direction arrows).
+- **Clipping:** CSS `clip-path: inset(0 (100% - split) 0 0)` and `-webkit-clip-path` on `#previewBefore` allow instantaneous, artifact-free split manipulation without recreating blobs or decoding images during dragging.
+- **Pointer Capture:** `stage.setPointerCapture(event.pointerId)` on `pointerdown` guarantees uninterrupted dragging across and outside the panel window. Object URLs are revoked on replacement and unload.
 
 ### Writeback and verification
 
@@ -175,9 +176,10 @@ This checks one witness, not every output pixel or all seams. The precise origin
 | Node diagnostic boundary tests | Three tests previously passed; separate from UXP host execution. |
 | Photoshop native boundary checks | User confirmed six passing checks; explicitly no GPU inference. |
 | Initial live canvas acceptance | User confirmed 1024x1024 RGB32 sRGB, seams at 960/960 at 100%/200%, one undo/redo, and no observed instability. Not proof of long-run leak freedom. |
-| Current frontend automated tests | 25 tests passed after bounded verification changes; Photoshop is mocked. |
-| Current preview/apply acceptance | Pending user retest after the regression patches. |
-| Neural/CUDA/local-enhancement mode | Disabled/not accepted. |
+| Current frontend automated tests | 26 tests passed after Phase 8A local enhancement and bounded verification changes; Photoshop is mocked. |
+| Current preview/apply acceptance | Pending user retest after the regression and Phase 8A patches. |
+| Neural/CUDA mode | Disabled/not accepted. |
+| Phase 8A Local Enhancement mode | Implemented in frontend; verified in offline mock (test 26); pending live host retest. |
 
 ## 9. Reproduction and debugging
 
@@ -206,13 +208,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Native validation failed' }
 
 GPU tests are opt-in real device work. Frontend tests do not require Photoshop. Use the offline guide for SDK staging and native symbols. For live verification, select the original populated raster layer, test Preview, apply, inspect seams and alpha, then verify a single undo/redo. Preserve exact error messages and test-document profile/bit depth/bounds in the handoff.
 
-## 10. Phase 8 choices — awaiting instruction
+## 10. Phase 8 status and next steps
 
-### Phase 8A: explicit Local Enhancement Mode
+### Phase 8A: Local Enhancement Mode (Implemented)
 
-Retain validation as a separate diagnostic mode and keep `neuralInference: false`. Reuse the existing `pixels.js` 7x7 luminance box high-pass, intensity blend, style multipliers and smoothstep edge feathering with explicit local-enhancement labeling. Controls already exist in source but are bypassed in validation. Feathering is inward from rectangular layer bounds, not Photoshop selection/mask editing. Do not describe a CPU filter as DLSS, neural rendering, or compute shader work unless implemented as such. Preserve HDR range, original alpha, tile equivalence and one-step undo; measure latency before promising real time.
+Local Enhancement Mode is implemented on top of the validated D3D12 transport. The panel exposes a Mode dropdown switching between **Local Enhancement** (7×7 box high-pass structure filter, controllable NR Intensity blend, style multipliers, and smoothstep edge feathering) and **GPU Validation** (raw D3D12 copy diagnostic pass). Controls are enabled in Local Enhancement and disabled in GPU Validation. Both modes maintain linear float32 HDR processing, straight alpha restoration, and single-history transaction rollback.
 
-### Phase 8B: edge-case acceptance
+### Phase 8B: edge-case acceptance (Pending Next Step)
 
 Recommended order after current revision passes: 8/16/32-bit sources; non-sRGB profiles; sparse transparency and holes; fractional/negative/off-canvas bounds; odd and tiny dimensions; HDR/negative RGB within the FP16 contract; cancellation requested during a tile with deferred rollback; repeated runs and unload/memory observation. Test partial write failure and single-history rollback. Document expected versus observed profile/alpha semantics. Do not infer success from synthetic tests alone.
 

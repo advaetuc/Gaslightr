@@ -43,7 +43,7 @@ test("structure and feather agree across overlapping tiles", () => {
   }
 });
 test("invalid settings and non-finite GPU data are rejected", () => {
-  for (const settings of [{ intensity: NaN }, { feather: 33 }, { preset: 0.5 }, { style: "imaginary" }]) assert.throws(() => p.settings(settings));
+  for (const settings of [{ intensity: NaN }, { feather: 33 }, { preset: 0.5 }, { style: "imaginary" }, { mode: "imaginary" }]) assert.throws(() => p.settings(settings));
   assert.throws(() => p.blend(new Float32Array(4), new Float32Array([NaN, 1, 1, 1]), 1, 1,
     { left: 0, top: 0 }, { left: 0, top: 0, right: 1, bottom: 1 }, p.settings()));
   assert.deepEqual([...p.displayBytes(new Float32Array([-1, 1, 4, 0.5]))], [0, 255, 255, 128]);
@@ -324,4 +324,19 @@ test("ImageBlob uses exact-size ArrayBuffer, with compatibility retry for host t
     constructor() { ++calls; throw new Error("Unsupported profile"); }
   }), /Unsupported profile/);
   assert.equal(calls, 1);
+});
+
+test("local enhancement mode executes CPU 7x7 filter and blends on top of d3d12-validation-copy backend", async () => {
+  const h = host();
+  h.api.capabilities = () => ({ protocol: 1, detailOnly: false, neuralInference: false,
+    sdkMessaging: false, executionMode: "d3d12-validation-copy" });
+  const process = h.api.processTile;
+  h.api.processTile = async input => { const result = await process(input); result[0] = 0.25; return result; };
+  const preview = await h.bridge.preview({ mode: "enhancement", intensity: 0.8, structure: 0.5 });
+  assert.equal(preview.input[0], 0.5);
+  // Unlike validation mode where output[0] stays 0.25, enhancement blends output:
+  assert.notEqual(preview.output[0], 0.25);
+  await h.bridge.apply({ mode: "enhancement", intensity: 0.8, structure: 0.5 });
+  assert.ok(h.calls.some(x => x[0] === "historyName" && x[1] === "Gaslightr enhancement"));
+  assert.deepEqual(h.calls.at(-1), ["resume", true]);
 });

@@ -3,126 +3,287 @@
 const { createBridge } = require("./bridge.js");
 const { displayBytes } = require("./pixels.js");
 const { createPreviewBlob } = require("./preview-image.js");
+
 let addon;
 const bridge = createBridge(require("photoshop"), async () => {
   if (!addon) addon = await require("gaslightr.uxpaddon");
   return addon;
 });
-const state = { intensity: 0.5, structure: 0, feather: 0, style: "default", preset: 0, detailOnly: false };
+
+const state = { intensity: 0.5, structure: 0, feather: 0, style: "default", preset: 0, detailOnly: false, mode: "enhancement" };
 const element = id => document.getElementById(id);
-let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false, dragging = false, validationMode = false;
-let previewUrl = null;
+
+let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false;
+let previewUrlAfter = null, previewUrlBefore = null, isDragging = false;
+
 const status = message => {
-  element("status").value = String(message);
-  element("status").scrollTop = 0;
+  const el = element("status");
+  if (el) {
+    el.value = String(message);
+    el.scrollTop = 0;
+  }
   console.log(`[Gaslightr] ${new Date().toISOString()} ${message}`);
 };
+
 console.log("[Gaslightr] panel script loaded");
-for (const [key, label, max, step] of [["intensity", "NR Intensity", 1, 0.01], ["structure", "Local Tone / Structure", 1, 0.01], ["feather", "Mask Feathering · layer edges (px)", 32, 1]]) {
-  const control = document.createElement("div"); control.className = "control";
-  const caption = document.createElement("label"); caption.textContent = label;
-  const row = document.createElement("div"); row.className = "control-row";
-  const slider = document.createElement("sp-slider"), number = document.createElement("input");
+
+// Dynamic generation of slider controls
+for (const [key, label, max, step] of [
+  ["intensity", "NR Intensity", 1, 0.01],
+  ["structure", "Local Tone / Structure", 1, 0.01],
+  ["feather", "Mask Feathering · layer edges (px)", 32, 1]
+]) {
+  const control = document.createElement("div");
+  control.className = "control";
+  const caption = document.createElement("label");
+  caption.textContent = label;
+  const row = document.createElement("div");
+  row.className = "control-row";
+  const slider = document.createElement("sp-slider");
+  const number = document.createElement("input");
   number.type = "number";
+
   for (const field of [slider, number]) {
-    field.setAttribute("min", "0"); field.setAttribute("max", String(max)); field.setAttribute("step", String(step));
-    field.setAttribute("aria-label", label); field.value = state[key];
+    field.setAttribute("min", "0");
+    field.setAttribute("max", String(max));
+    field.setAttribute("step", String(step));
+    field.setAttribute("aria-label", label);
+    field.value = state[key];
     field.addEventListener("input", () => {
       const next = Number(field.value);
       if (!Number.isFinite(next)) return;
-      state[key] = Math.max(0, Math.min(max, next)); slider.value = state[key]; number.value = state[key]; schedule();
+      state[key] = Math.max(0, Math.min(max, next));
+      slider.value = state[key];
+      number.value = state[key];
+      schedule();
     });
     row.appendChild(field);
   }
-  control.appendChild(caption); control.appendChild(row); element("controls").appendChild(control);
+  control.appendChild(caption);
+  control.appendChild(row);
+  element("controls").appendChild(control);
 }
-for (const key of ["style", "preset", "detailOnly"]) element(key).addEventListener("change", () => {
-  state[key] = key === "detailOnly" ? element(key).checked : key === "preset" ? Number(element(key).value) : element(key).value;
-  schedule();
-});
+
+// Event listeners for selects and checkboxes
+for (const key of ["style", "preset", "detailOnly", "mode"]) {
+  const el = element(key);
+  if (el) {
+    el.addEventListener("change", () => {
+      state[key] = key === "detailOnly" ? el.checked : key === "preset" ? Number(el.value) : el.value;
+      if (key === "mode") updateModeUI();
+      schedule();
+    });
+  }
+}
+
+function updateModeUI() {
+  const isValidation = state.mode === "validation";
+  const enhancement = element("enhancementSettings");
+  if (enhancement) enhancement.style.display = isValidation ? "none" : "";
+
+  const note = element("precisionNote");
+  if (note) {
+    note.textContent = isValidation
+      ? "RGB passes through FP16 textures. Original alpha is preserved."
+      : "Linear float32 pipeline · 7×7 luminance structure filter · smoothstep feathering.";
+  }
+
+  const applyBtn = element("apply");
+  if (applyBtn) {
+    applyBtn.textContent = isValidation ? "Create validation layer" : "Enhance layer";
+  }
+
+  const backend = element("backendStatus");
+  if (backend) {
+    backend.textContent = isValidation
+      ? "GPU validation mode · raw D3D12 copy · neural inference off"
+      : "Local enhancement mode · GPU transport + 7×7 structure filter";
+  }
+
+  for (const control of document.querySelectorAll("#controls sp-slider, #controls input, #style, #preset")) {
+    control.disabled = isValidation;
+  }
+}
+
 function schedule() {
-  ++revision; pendingPreview = true; clearTimeout(timer);
-  timer = setTimeout(() => { if (!bridge.isBusy()) run(false); }, 350);
+  ++revision;
+  pendingPreview = true;
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    if (!bridge.isBusy()) run(false);
+  }, 350);
 }
+
+// Split slider update
+function updateDivider() {
+  const pct = Math.max(0, Math.min(100, split * 100));
+  const divider = element("previewDivider");
+  const beforeImg = element("previewBefore");
+  if (divider) divider.style.left = `${pct}%`;
+  if (beforeImg) {
+    beforeImg.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    beforeImg.style.webkitClipPath = `inset(0 ${100 - pct}% 0 0)`;
+  }
+}
+
 function draw() {
-  const image = element("preview");
+  const afterImg = element("preview");
+  const beforeImg = element("previewBefore");
+
   if (!preview) {
-    image.removeAttribute("src");
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = null;
+    if (afterImg) afterImg.removeAttribute("src");
+    if (beforeImg) beforeImg.removeAttribute("src");
+    if (previewUrlAfter) URL.revokeObjectURL(previewUrlAfter);
+    if (previewUrlBefore) URL.revokeObjectURL(previewUrlBefore);
+    previewUrlAfter = null;
+    previewUrlBefore = null;
     return;
   }
+
   const { width, height } = preview;
-  const frame = displayBytes(preview.output), cut = Math.round(width * split);
-  const before = displayBytes(preview.input);
-  for (let y = 0; y < height; ++y)
-    frame.set(before.subarray(y * width * 4, (y * width + cut) * 4), y * width * 4);
-  const blob = createPreviewBlob(frame, width, height, ImageBlob);
-  const nextUrl = URL.createObjectURL(blob);
-  try { image.src = nextUrl; }
-  catch (error) { URL.revokeObjectURL(nextUrl); throw error; }
-  const previousUrl = previewUrl;
-  previewUrl = nextUrl;
-  if (previousUrl) URL.revokeObjectURL(previousUrl);
+
+  // Generate output blob (After)
+  const afterBytes = displayBytes(preview.output);
+  const afterBlob = createPreviewBlob(afterBytes, width, height, ImageBlob);
+  const nextAfterUrl = URL.createObjectURL(afterBlob);
+
+  // Generate input blob (Before)
+  const beforeBytes = displayBytes(preview.input);
+  const beforeBlob = createPreviewBlob(beforeBytes, width, height, ImageBlob);
+  const nextBeforeUrl = URL.createObjectURL(beforeBlob);
+
+  try {
+    if (afterImg) afterImg.src = nextAfterUrl;
+    if (beforeImg) beforeImg.src = nextBeforeUrl;
+  } catch (error) {
+    URL.revokeObjectURL(nextAfterUrl);
+    URL.revokeObjectURL(nextBeforeUrl);
+    throw error;
+  }
+
+  const prevAfter = previewUrlAfter;
+  const prevBefore = previewUrlBefore;
+  previewUrlAfter = nextAfterUrl;
+  previewUrlBefore = nextBeforeUrl;
+
+  if (prevAfter) URL.revokeObjectURL(prevAfter);
+  if (prevBefore) URL.revokeObjectURL(prevBefore);
+
+  updateDivider();
 }
+
 async function run(apply) {
   if (bridge.isBusy()) return;
-  clearTimeout(timer); pendingPreview = false;
+  clearTimeout(timer);
+  pendingPreview = false;
   const current = ++revision;
-  element("apply").disabled = element("refresh").disabled = true; element("cancel").disabled = false;
-  status(apply ? (validationMode ? "Running GPU validation…" : "Enhancing layer…") : "Rendering preview…");
+  const isValidation = state.mode === "validation";
+
+  element("apply").disabled = element("refresh").disabled = true;
+  element("cancel").disabled = false;
+  status(apply ? (isValidation ? "Running GPU validation…" : "Enhancing layer…") : "Rendering preview…");
+
   try {
-    if (apply) { await bridge.apply({ ...state }); status(validationMode ? "GPU validation layer created. No neural inference ran." : "Enhanced layer created."); }
-    else {
+    if (apply) {
+      await bridge.apply({ ...state });
+      status(isValidation ? "GPU validation layer created. No neural inference ran." : "Enhanced layer created.");
+    } else {
       const result = await bridge.preview({ ...state });
-      if (revision === current) { preview = result; draw(); status(result ? "Drag across the preview to compare." : "No pixels in the preview region."); }
+      if (revision === current) {
+        preview = result;
+        draw();
+        status(result ? "Drag divider to compare before and after." : "No pixels in the preview region.");
+      }
     }
-  } catch (error) { status(error.message || String(error)); }
-  finally {
-    element("apply").disabled = element("refresh").disabled = false; element("cancel").disabled = true;
+  } catch (error) {
+    status(error.message || String(error));
+  } finally {
+    element("apply").disabled = element("refresh").disabled = false;
+    element("cancel").disabled = true;
     if (pendingPreview) schedule();
   }
 }
+
 element("refresh").addEventListener("click", () => run(false));
 element("nativeCheck").addEventListener("click", async () => {
   if (bridge.isBusy()) return;
   element("nativeCheck").disabled = true;
-  try { status(await bridge.checkNative()); }
-  catch (error) { status(error.message || String(error)); }
-  finally { element("nativeCheck").disabled = false; }
+  try {
+    status(await bridge.checkNative());
+  } catch (error) {
+    status(error.message || String(error));
+  } finally {
+    element("nativeCheck").disabled = false;
+  }
 });
+
 element("apply").addEventListener("click", () => run(true));
-element("cancel").addEventListener("click", () => { pendingPreview = false; clearTimeout(timer); ++revision; bridge.cancel(); status("Cancelling after the current tile…"); });
-const previewImage = element("preview");
-function compare(event) {
-  const bounds = previewImage.getBoundingClientRect();
-  if (!preview || bounds.width <= 0) return;
-  split = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-  try { draw(); }
-  catch (error) { dragging = false; status(error.message || String(error)); }
-}
-previewImage.addEventListener("mousedown", event => { dragging = true; compare(event); });
-previewImage.addEventListener("mousemove", event => { if (dragging) compare(event); });
-previewImage.addEventListener("error", () => status("Preview image could not be displayed. Document processing is unaffected."));
-window.addEventListener("unload", () => {
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = null;
+element("cancel").addEventListener("click", () => {
+  pendingPreview = false;
+  clearTimeout(timer);
+  ++revision;
+  bridge.cancel();
+  status("Cancelling after the current tile…");
 });
-document.addEventListener("mouseup", () => { dragging = false; });
+
+// Pointer drag interaction with setPointerCapture
+const stage = element("previewStage");
+function setSplitFromPointer(clientX) {
+  if (!stage || !preview) return;
+  const rect = stage.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const clampedX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+  split = clampedX / rect.width;
+  updateDivider();
+}
+
+if (stage) {
+  stage.addEventListener("pointerdown", event => {
+    if (!preview) return;
+    isDragging = true;
+    try {
+      stage.setPointerCapture(event.pointerId);
+    } catch (_) {}
+    setSplitFromPointer(event.clientX);
+  });
+
+  stage.addEventListener("pointermove", event => {
+    if (!isDragging) return;
+    setSplitFromPointer(event.clientX);
+  });
+
+  const endDrag = event => {
+    if (!isDragging) return;
+    isDragging = false;
+    try {
+      if (event && event.pointerId) stage.releasePointerCapture(event.pointerId);
+    } catch (_) {}
+  };
+
+  stage.addEventListener("pointerup", endDrag);
+  stage.addEventListener("pointercancel", endDrag);
+  window.addEventListener("pointerup", endDrag);
+}
+
+const previewAfterImg = element("preview");
+if (previewAfterImg) {
+  previewAfterImg.addEventListener("error", () => {
+    status("Preview image could not be displayed. Document processing is unaffected.");
+  });
+}
+
+window.addEventListener("unload", () => {
+  if (previewUrlAfter) URL.revokeObjectURL(previewUrlAfter);
+  if (previewUrlBefore) URL.revokeObjectURL(previewUrlBefore);
+  previewUrlAfter = null;
+  previewUrlBefore = null;
+});
+
 async function initializeNativeStatus() {
   try {
     const caps = await bridge.capabilities();
     console.log(`[Gaslightr] native capabilities ${JSON.stringify(caps)}`);
-    validationMode = caps.executionMode === "d3d12-validation-copy";
-    element("backendStatus").textContent = validationMode
-      ? "GPU validation mode · neural inference off"
-      : (caps.neuralInference === false ? caps.neuralInferenceReason : "Neural processing");
-    if (validationMode) {
-      element("enhancementSettings").style.display = "none";
-      element("precisionNote").textContent = "RGB passes through FP16 textures. Original alpha is preserved.";
-      element("apply").textContent = "Create validation layer";
-      for (const control of document.querySelectorAll("#controls sp-slider, #controls input, #style, #preset")) control.disabled = true;
-    }
+    updateModeUI();
     element("detailOnly").disabled = !caps.detailOnly;
     element("detailStatus").textContent = caps.detailOnly ? "" : caps.detailOnlyReason;
   } catch (error) {
@@ -132,4 +293,5 @@ async function initializeNativeStatus() {
     status(error.message);
   }
 }
+
 initializeNativeStatus();

@@ -1,26 +1,95 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><link rel="stylesheet" href="styles.css"></head>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="styles.css">
+</head>
 <body>
-  <div class="panel-header">
-    <h2>Gaslightr</h2>
-    <sp-body id="backendStatus" size="s">Checking processing mode…</sp-body>
-    <sp-button id="nativeCheck" variant="secondary">Check native bridge</sp-button>
-    <label class="response-label" for="status">Latest response</label>
-    <textarea id="status" readonly aria-label="Latest response" aria-live="polite">Ready</textarea>
+  <div class="panel-scroll-container">
+
+    <!-- Section 1: Header & Mode/Status Banner -->
+    <header class="section-card banner-section">
+      <div class="title-row">
+        <h2>Gaslightr</h2>
+        <span class="version-tag">v0.2.0</span>
+      </div>
+      <sp-body id="backendStatus" size="s" class="status-banner">Checking processing mode…</sp-body>
+      <div class="field-group mode-field">
+        <label for="mode" class="field-label">Processing Mode</label>
+        <select id="mode">
+          <option value="enhancement">Local Enhancement (GPU transport + 7×7 filter)</option>
+          <option value="validation">GPU Validation (raw D3D12 copy)</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- Section 2: Preview Card with Comparison Split Slider -->
+    <section class="section-card preview-card">
+      <div class="preview-stage" id="previewStage">
+        <img id="preview" class="preview-layer preview-after" alt="Enhanced preview" draggable="false">
+        <img id="previewBefore" class="preview-layer preview-before" alt="Original preview" draggable="false">
+        <div id="previewDivider" class="preview-divider">
+          <div class="preview-handle" title="Drag to compare before and after">
+            <span class="handle-arrow">◀</span>
+            <span class="handle-grip">❙</span>
+            <span class="handle-arrow">▶</span>
+          </div>
+        </div>
+        <span class="preview-badge badge-before">Before</span>
+        <span class="preview-badge badge-after">After</span>
+      </div>
+      <sp-body size="s" class="preview-caption">Drag divider to compare · full-resolution center crop</sp-body>
+    </section>
+
+    <!-- Section 3: Enhancement Parameters -->
+    <section class="section-card parameters-section" id="enhancementSettings">
+      <div class="section-title-row">
+        <span class="field-label">Enhancement Parameters</span>
+      </div>
+      <div id="controls"></div>
+      <div class="field-group">
+        <label for="style" class="field-label">NR Style</label>
+        <select id="style">
+          <option value="default">Default</option>
+          <option value="natural">Natural</option>
+          <option value="cinematic">Cinematic</option>
+        </select>
+        <sp-body size="s" class="field-hint">Styles control the strength of the enhancement blend.</sp-body>
+      </div>
+      <div class="field-group">
+        <label for="preset" class="field-label">DLSS Performance Preset</label>
+        <select id="preset">
+          <option value="0">Quality</option>
+          <option value="1">Balanced</option>
+          <option value="2">Performance</option>
+        </select>
+      </div>
+      <div class="field-group checkbox-group">
+        <sp-checkbox id="detailOnly">Detail-Only · CIELAB chroma preservation</sp-checkbox>
+        <sp-body id="detailStatus" size="s"></sp-body>
+      </div>
+      <sp-body id="precisionNote" size="s" class="precision-note"></sp-body>
+    </section>
+
+    <!-- Section 4: Action Buttons -->
+    <section class="section-card actions-section">
+      <sp-button id="apply" variant="cta" class="btn-main">Enhance layer</sp-button>
+      <div class="btn-sub-row">
+        <sp-button id="refresh" variant="secondary" class="btn-sub">Preview</sp-button>
+        <sp-button id="cancel" variant="secondary" class="btn-sub" disabled>Cancel</sp-button>
+      </div>
+    </section>
+
+    <!-- Section 5: Diagnostic Logs -->
+    <section class="section-card diagnostics-section">
+      <div class="diagnostics-header">
+        <label class="field-label" for="status">Diagnostics & Response</label>
+        <sp-button id="nativeCheck" variant="secondary" size="s">Check native bridge</sp-button>
+      </div>
+      <textarea id="status" readonly aria-label="Latest response" aria-live="polite">Ready</textarea>
+    </section>
+
   </div>
-  <div class="panel-content">
-    <div id="enhancementSettings">
-    <div id="controls"></div>
-    <label>NR Style <select id="style"><option value="default">Default</option><option value="natural">Natural</option><option value="cinematic">Cinematic</option></select></label>
-    <sp-body size="s">Styles control the strength of the enhancement blend.</sp-body>
-    <label>DLSS Performance Preset <select id="preset"><option value="0">Quality</option><option value="1">Balanced</option><option value="2">Performance</option></select></label>
-    <sp-checkbox id="detailOnly">Detail-Only · CIELAB chroma preservation</sp-checkbox>
-    <sp-body id="detailStatus" size="s"></sp-body>
-    </div>
-    <img id="preview" alt="Preview. Drag to compare before and after." draggable="false">
-    <sp-body size="s">Drag to compare · preview uses a full-resolution center crop</sp-body>
-    <sp-body id="precisionNote" size="s"></sp-body>
-  </div>
-  <div class="actions"><sp-button id="refresh" variant="secondary">Preview</sp-button><sp-button id="apply" variant="cta">Enhance layer</sp-button><sp-button id="cancel" variant="secondary" disabled>Cancel</sp-button></div>
   <script src="index.jsx"></script>
-</body></html>
+</body>
+</html>

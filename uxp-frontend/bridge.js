@@ -84,9 +84,10 @@ function createBridge(ps, loadNative) {
         if (i % 4 === 3 && output[i] !== input[i])
           throw new Error("Native output changed source alpha; output layer was rolled back.");
       }
-      // Acceptance mode must expose GPU readback, even when intensity is zero.
-      // Otherwise a CPU blend could conceal a broken upload/copy/readback path.
-      if (api.capabilities().executionMode !== "d3d12-validation-copy")
+      // Validation mode exposes raw GPU readback without CPU blending.
+      // Local enhancement mode executes 7x7 high-pass structure, intensity, and feathering.
+      const isValidation = config.mode === "validation" || (config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
+      if (!isValidation)
         pixels.blend(input, output, width, height, bounds, src.bounds, config);
       return { input, output, bounds, width, height };
     } finally { image.imageData.dispose(); }
@@ -113,7 +114,7 @@ function createBridge(ps, loadNative) {
     apply: value => modal("Gaslightr enhancement", async context => {
       const config = pixels.settings(value), api = await native(), caps = validateCapabilities(api, config), src = source();
       if (caps.sdkMessaging) await sendInModal("configure", { documentID: src.documentID, layerID: src.layerID, bounds: src.bounds, ...config });
-      const validation = caps.executionMode === "d3d12-validation-copy";
+      const validation = config.mode === "validation" || (config.mode !== "enhancement" && caps.executionMode === "d3d12-validation-copy");
       const history = await context.hostControl.suspendHistory({ documentID: src.documentID,
         name: validation ? "Gaslightr GPU validation" : "Gaslightr enhancement" });
       let committed = false;
