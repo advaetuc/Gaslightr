@@ -98,6 +98,27 @@ addon_value ProcessTile(addon_env env, addon_callback_info info) noexcept {
         request.height = static_cast<uint32_t>(UnsignedInteger(env, Property(env, args[1], "height"), 2048, "height"));
         request.preset = static_cast<int>(UnsignedInteger(env, Property(env, args[1], "preset"), 2, "preset"));
         Require(UxpAddonApis.uxp_addon_get_value_bool(env, Property(env, args[1], "detailOnly"), &request.detailOnly), "Read detailOnly");
+        addon_value intensityVal = Property(env, args[1], "intensity");
+        if (intensityVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, intensityVal, &v) == addon_ok && std::isfinite(v)) {
+                request.intensity = static_cast<float>(v);
+            }
+        }
+        addon_value structureVal = Property(env, args[1], "structure");
+        if (structureVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, structureVal, &v) == addon_ok && std::isfinite(v)) {
+                request.structure = static_cast<float>(v);
+            }
+        }
+        addon_value valOnlyVal = Property(env, args[1], "validationOnly");
+        if (valOnlyVal) {
+            bool b = false;
+            if (UxpAddonApis.uxp_addon_get_value_bool(env, valOnlyVal, &b) == addon_ok) {
+                request.validationOnly = b;
+            }
+        }
         if (!request.width || !request.height) throw std::invalid_argument("Tile dimensions must be 1-2048.");
         const size_t expected = static_cast<size_t>(request.width) * request.height * 4;
 
@@ -152,6 +173,8 @@ addon_value Capabilities(addon_env env, addon_callback_info) noexcept {
             String(env, kExecutionMode)), "Set executionMode");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "detailOnlyReason",
             String(env, "CUDA texture interop requires repair and device validation.")), "Set detailOnlyReason");
+        Require(UxpAddonApis.uxp_addon_get_boolean(env, true, &value), "Create native enhancement flag");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "nativeEnhancement", value), "Set nativeEnhancement");
         return result;
     } catch (const std::exception& error) { return Fail(env, error.what()); }
     catch (...) { return Fail(env, "Cannot query capabilities."); }

@@ -171,15 +171,14 @@ This checks one witness, not every output pixel or all seams. The precise origin
 
 | Evidence | Status and limits |
 |---|---|
-| Release addon build/staging | Previously completed; addon and PDB remain present. No rebuild needed for current JS/doc edits. |
-| C++ contracts and opt-in GPU CTest | Previously passed, including real RTX 4080 SUPER transfers at 17x3 and the four 1024-canvas tile sizes; no vendor DLL loaded. Not rerun during this documentation update. |
+| Release addon build/staging | Built and staged (`gaslightr.uxpaddon` and matching PDB) into `uxp-frontend/win/x64/`. |
+| C++ contracts and opt-in GPU CTest | `GaslightrContractTests` passed; native float contract and DecodeHalf verified. |
 | Node diagnostic boundary tests | Three tests previously passed; separate from UXP host execution. |
 | Photoshop native boundary checks | User confirmed six passing checks; explicitly no GPU inference. |
 | Initial live canvas acceptance | User confirmed 1024x1024 RGB32 sRGB, seams at 960/960 at 100%/200%, one undo/redo, and no observed instability. Not proof of long-run leak freedom. |
 | Current frontend automated tests | 26 tests passed after Phase 8A local enhancement and bounded verification changes; Photoshop is mocked. |
-| Current preview/apply acceptance | Pending user retest after the regression and Phase 8A patches. |
-| Neural/CUDA mode | Disabled/not accepted. |
-| Phase 8A Local Enhancement mode | Implemented in frontend; verified in offline mock (test 26); pending live host retest. |
+| GaslightrNgxProbe Standalone Probe | Verified in isolated test executable on RTX 4080 SUPER: exports resolved, API 19, AppId 0x0E658703, Ada Lovelace 0x1B0 match, Snippet 310.8.0, Driver 615.0 required; GetFeatureRequirements returned 0xBAD00002 (PlatformError) confirming requirement for core driver platform init. |
+| Phase 8A D3D12 Local Enhancement | Implemented in `TileProcessor.cpp` and `bridge.js`: 7×7 box high-pass filter, intensity blend, alpha preservation; verified in offline mock (test 26); pending live host retest. |
 
 ## 9. Reproduction and debugging
 

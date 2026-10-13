@@ -12,6 +12,10 @@ struct TileRequest {
     uint32_t height = 0;
     int preset = 0;
     bool detailOnly = false;
+    float intensity = 0.0f;
+    float structure = 0.0f;
+    float feather = 0.0f;
+    bool validationOnly = true;
 };
 inline void ValidateTile(std::span<const float> rgba, const TileRequest& request) {
     if (request.width == 0 || request.height == 0 || request.width > 2048 || request.height > 2048)
@@ -20,6 +24,10 @@ inline void ValidateTile(std::span<const float> rgba, const TileRequest& request
         throw std::invalid_argument("Performance preset must be 0, 1, or 2.");
     if (request.detailOnly)
         throw std::invalid_argument("Detail-Only is unavailable: CUDA texture interop has not been validated.");
+    if (!std::isfinite(request.intensity) || request.intensity < 0.0f || request.intensity > 1.0f)
+        throw std::invalid_argument("Intensity must be between 0 and 1.");
+    if (!std::isfinite(request.structure) || request.structure < 0.0f || request.structure > 1.0f)
+        throw std::invalid_argument("Structure must be between 0 and 1.");
     if (rgba.size() != static_cast<size_t>(request.width) * request.height * 4)
         throw std::invalid_argument("Expected exactly width * height * 4 float32 components.");
     for (size_t i = 0; i < rgba.size(); ++i) {

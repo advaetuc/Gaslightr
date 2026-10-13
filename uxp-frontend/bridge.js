@@ -74,8 +74,12 @@ function createBridge(ps, loadNative) {
         throw new Error("Unexpected Photoshop tile dimensions.");
       // Own the bytes retained by preview after PhotoshopImageData.dispose().
       const input = new Float32Array(pixels.rgba(await image.imageData.getData({ chunky: true }), width, height, components));
-      checkCancel(context);
-      const output = await api.processTile(input, { width, height, preset: config.preset, detailOnly: config.detailOnly });
+      const isValidation = config.mode === "validation" || (config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
+      const output = await api.processTile(input, {
+        width, height, preset: config.preset, detailOnly: config.detailOnly,
+        intensity: config.intensity, structure: config.structure,
+        validationOnly: isValidation
+      });
       checkCancel(context);
       if (!(output instanceof Float32Array) || output.length !== input.length)
         throw new Error("Native output is not a complete RGBA32F tile.");
@@ -85,9 +89,8 @@ function createBridge(ps, loadNative) {
           throw new Error("Native output changed source alpha; output layer was rolled back.");
       }
       // Validation mode exposes raw GPU readback without CPU blending.
-      // Local enhancement mode executes 7x7 high-pass structure, intensity, and feathering.
-      const isValidation = config.mode === "validation" || (config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
-      if (!isValidation)
+      // If native addon did not apply enhancement (e.g. in offline mock), apply JS blend fallback.
+      if (!isValidation && !api.capabilities().nativeEnhancement)
         pixels.blend(input, output, width, height, bounds, src.bounds, config);
       return { input, output, bounds, width, height };
     } finally { image.imageData.dispose(); }
