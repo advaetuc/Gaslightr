@@ -96,7 +96,7 @@ function host({ width = 1921, failTile = -1, trim = false, asyncAddon = false } 
     processTile: async input => { check(); if (++count === failTile) throw new Error("GPU test failure"); if (api.cancel) bridge.cancel(); return input.slice(); }
   };
   bridge = createBridge(ps, () => asyncAddon ? Promise.resolve(api) : api);
-  return { bridge, api, ps, calls, ctx, listeners };
+  return { bridge, api, ps, calls, ctx, listeners, doc, layer };
 }
 test("apply writes non-overlapping chunks and commits one history transaction", async () => {
   const h = host();
@@ -104,7 +104,8 @@ test("apply writes non-overlapping chunks and commits one history transaction", 
   const writes = h.calls.filter(x => x[0] === "put");
   assert.equal(writes.length, 3);
   assert.deepEqual(writes.map(x => x[1].targetBounds.left), [-3, 957, 1917]);
-  assert.ok(writes.every(x => x[1].replace === false && x[1].layerID === 8));
+  assert.ok(writes.every(x => x[1].layerID === 8));
+  assert.deepEqual(writes.map(x => x[1].replace), [true, false, false]);
   assert.deepEqual(h.calls.at(-1), ["resume", true]);
   assert.equal(h.listeners.size, 0);
 });
@@ -176,4 +177,151 @@ test("GPU validation exposes readback without CPU blending and labels its layer 
   assert.ok(h.calls.some(x => x[0] === "layerName" && x[1] === "Source · Gaslightr GPU validation"));
   assert.ok(h.calls.some(x => x[0] === "historyName" && x[1] === "Gaslightr GPU validation"));
   assert.deepEqual(h.calls.at(-1), ["resume", true]);
+});
+
+test("source IDs stay pinned when creating a layer changes the host layer reference", async () => {
+  const h = host();
+  const create = h.doc.createLayer;
+  h.doc.createLayer = async options => { h.layer.id = 8; return create(options); };
+  await h.bridge.apply({});
+  const reads = h.calls.filter(x => x[0] === "get").map(x => x[1]);
+  assert.ok(reads.slice(0, -1).every(x => x.layerID === 7));
+  assert.equal(reads.at(-1).layerID, 8);
+  assert.ok(h.calls.findIndex(x => x[0] === "get") < h.calls.indexOf("create"));
+});
+
+test("preview owns its input after the host releases the pixel allocation", async () => {
+  const h = host();
+  const read = h.ps.imaging.getPixels;
+  h.ps.imaging.getPixels = async options => {
+    const result = await read(options), data = await result.imageData.getData();
+    const dispose = result.imageData.dispose;
+    result.imageData.getData = async () => data;
+    result.imageData.dispose = () => { data.fill(NaN); dispose(); };
+    return result;
+  };
+  const result = await h.bridge.preview({});
+  assert.ok(result.input.every(x => x === 0.5));
+});
+
+test("successful writes followed by transparent readback roll back instead of committing a blank layer", async () => {
+  const h = host();
+  const read = h.ps.imaging.getPixels;
+  h.ps.imaging.getPixels = async options => {
+    const result = await read(options);
+    if (options.layerID === 8) result.imageData.getData = async () => new Float32Array(result.imageData.width * result.imageData.height * 4);
+    return result;
+  };
+  await assert.rejects(h.bridge.apply({}), /transparent output/);
+  assert.deepEqual(h.calls.at(-1), ["resume", false]);
+});
+
+test("writeback verification locates the witness using returned bounds and dimensions", async () => {
+  const h = host();
+  const read = h.ps.imaging.getPixels;
+  h.ps.imaging.getPixels = async options => {
+    if (options.layerID !== 8) return read(options);
+    assert.ok(options.sourceBounds.right - options.sourceBounds.left > 1);
+    const result = await read({ ...options, sourceBounds: {
+      ...options.sourceBounds, left: options.sourceBounds.left - 1, top: options.sourceBounds.top - 1
+    } });
+    const data = new Float32Array(result.imageData.width * result.imageData.height * 4);
+    data[(result.imageData.width + 1) * 4 + 3] = 0.5;
+    result.imageData.getData = async () => data;
+    return result;
+  };
+  assert.equal(await h.bridge.apply({}), 8);
+  assert.deepEqual(h.calls.at(-1), ["resume", true]);
+});
+
+test("invalid verification metadata reports actual dimensions and level before rollback", async () => {
+  for (const level of [1, undefined]) {
+    const h = host();
+    const read = h.ps.imaging.getPixels;
+    h.ps.imaging.getPixels = async options => {
+      const result = await read(options);
+      if (options.layerID === 8) result.level = level;
+      return result;
+    };
+    await assert.rejects(h.bridge.apply({}), error => {
+      assert.match(error.message, /unexpected image metadata/);
+      assert.ok(error.message.includes(`size=960x3, components=4, level=${String(level)}`));
+      assert.match(error.message, /requested=.*returned=/);
+      return true;
+    });
+    assert.deepEqual(h.calls.at(-1), ["resume", false]);
+  }
+});
+
+test("empty-area errors identify source reads versus output verification and roll back", async () => {
+  for (const layerID of [7, 8]) {
+    const h = host();
+    const read = h.ps.imaging.getPixels;
+    h.ps.imaging.getPixels = async options => {
+      if (options.layerID === layerID) throw new Error("No pixels in the requested area");
+      return read(options);
+    };
+    await assert.rejects(h.bridge.apply({}), error => {
+      assert.match(error.message, layerID === 7 ? /Source tile read failed/ : /Output verification after 3 tile writes failed/);
+      assert.ok(error.message.includes(`document 2, layer ${layerID}, bounds`));
+      assert.match(error.message, /No pixels in the requested area/);
+      return true;
+    });
+    assert.deepEqual(h.calls.at(-1), ["resume", false]);
+    if (layerID === 7) assert.ok(!h.calls.includes("create"));
+  }
+});
+
+test("write failures identify the target and still dispose its image buffer", async () => {
+  const h = host();
+  h.ps.imaging.putPixels = async () => { throw new Error("Host write rejected"); };
+  await assert.rejects(h.bridge.apply({}), /Output tile write failed.*layer 8.*Host write rejected/);
+  assert.ok(h.calls.includes("writeDispose"));
+  assert.deepEqual(h.calls.at(-1), ["resume", false]);
+});
+
+test("validation mode rejects lost alpha even though enhancement blending is bypassed", async () => {
+  const h = host();
+  h.api.capabilities = () => ({ protocol: 1, detailOnly: false, sdkMessaging: false, executionMode: "d3d12-validation-copy" });
+  h.api.processTile = input => new Float32Array(input.length);
+  await assert.rejects(h.bridge.apply({}), /changed source alpha/);
+  assert.ok(!h.calls.includes("create"));
+  assert.deepEqual(h.calls.at(-1), ["resume", false]);
+});
+
+test("preview conversion uses isolated Uint8 RGBA with sRGB encoding and straight alpha", () => {
+  const input = new Float32Array([-1, 0.5, 4, 0.5]);
+  const bytes = p.displayBytes(input);
+  assert.ok(bytes instanceof Uint8Array);
+  assert.deepEqual([...bytes], [0, 188, 255, 128]);
+  assert.deepEqual([...input], [-1, 0.5, 4, 0.5]);
+});
+
+test("ImageBlob uses exact-size ArrayBuffer, with compatibility retry for host type rejection only", () => {
+  const { createPreviewBlob } = require("../uxp-frontend/preview-image.js");
+  const view = new Uint8Array([9, 1, 2, 3, 255, 9]).subarray(1, 5);
+  class BufferHost {
+    constructor(data, options) {
+      assert.ok(data instanceof ArrayBuffer);
+      assert.deepEqual([...new Uint8Array(data)], [1, 2, 3, 255]);
+      assert.equal(options.componentSize, 8);
+    }
+  }
+  createPreviewBlob(view, 1, 1, BufferHost);
+  let calls = 0;
+  class ViewHost {
+    constructor(data) {
+      ++calls;
+      if (data instanceof ArrayBuffer) throw new TypeError("Invalid type of arrayBuffer argument used in ImageBlob constructor");
+      assert.ok(data instanceof Uint8Array);
+      assert.deepEqual([...data], [1, 2, 3, 255]);
+    }
+  }
+  createPreviewBlob(view, 1, 1, ViewHost);
+  assert.equal(calls, 2);
+  calls = 0;
+  assert.throws(() => createPreviewBlob(view, 1, 1, class {
+    constructor() { ++calls; throw new Error("Unsupported profile"); }
+  }), /Unsupported profile/);
+  assert.equal(calls, 1);
 });

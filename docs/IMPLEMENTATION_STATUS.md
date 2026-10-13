@@ -1,5 +1,7 @@
 # Implementation status — 12 October 2026
 
+> Historical record. The [root master context](../GASLIGHTR_AGENT_CONTEXT.md), reconciled 13 October 2026, supersedes status claims below. Initial Photoshop canvas/seam/undo acceptance succeeded; later frontend regressions led to the current bounded-readback patch. All 25 frontend tests pass, but that patch awaits a live retest. Phase 8A/8B is awaiting user selection.
+
 ## 13 October: GPU validation mode
 
 This update supersedes the earlier runtime/host status below. The user confirmed Photoshop addon loading and all six native boundary checks. The neural backend is now disabled before DLL loading; `PipelineSimulator` performs explicit GPU copies through the temporal and ping-pong loops. Capabilities report `neuralInference: false` and `executionMode: d3d12-validation-copy`. JS postprocessing is bypassed and the UI/output/history are labeled validation. Input/output remains RGBA32F with RGBA16F GPU storage and original alpha restoration.

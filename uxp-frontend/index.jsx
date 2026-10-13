@@ -2,6 +2,7 @@
 "use strict";
 const { createBridge } = require("./bridge.js");
 const { displayBytes } = require("./pixels.js");
+const { createPreviewBlob } = require("./preview-image.js");
 let addon;
 const bridge = createBridge(require("photoshop"), async () => {
   if (!addon) addon = await require("gaslightr.uxpaddon");
@@ -56,11 +57,7 @@ function draw() {
   const before = displayBytes(preview.input);
   for (let y = 0; y < height; ++y)
     frame.set(before.subarray(y * width * 4, (y * width + cut) * 4), y * width * 4);
-  const blob = new ImageBlob(frame.buffer, {
-    type: "image/uncompressed", width, height, components: 4,
-    componentSize: 8, pixelFormat: "RGBA", colorSpace: "RGB",
-    colorProfile: "sRGB IEC61966-2.1", hasAlpha: true
-  });
+  const blob = createPreviewBlob(frame, width, height, ImageBlob);
   const nextUrl = URL.createObjectURL(blob);
   try { image.src = nextUrl; }
   catch (error) { URL.revokeObjectURL(nextUrl); throw error; }

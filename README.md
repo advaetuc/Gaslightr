@@ -1,10 +1,10 @@
 # Gaslightr
 
-Current mode: **D3D12 GPU copy validation**, with `neuralInference: false`. Photoshop addon loading and six boundary checks have been confirmed by the user. The real GPU transfer test passes on the RTX 4080 SUPER; live canvas/history acceptance is next. Follow [Phase 7 GPU validation](docs/PHASE7_GPU_VALIDATION.md). The validation path never loads the staged neural DLL.
+Current mode: **D3D12 GPU copy validation**, with `neuralInference: false`. The user confirmed addon loading, six boundary checks, and an initial live canvas/seam/undo test. The current frontend regression fixes have 25 passing mock-host tests and await a Photoshop retest. Read the [master engineering handoff](GASLIGHTR_AGENT_CONTEXT.md) for current status and the pending Phase 8A/8B decision. The validation path never loads the staged neural DLL.
 
 Experimental Windows x64 Photoshop enhancement project using a headless D3D12 temporal pipeline.
 
-The UXP frontend, bounded Imaging API orchestration, C++ tile processor, diagnostic Node-API binding, and real Adobe UXP addon are implemented. The `.uxpaddon` builds against the locally installed Adobe SDK and is staged with matching debugging symbols. **Live canvas acceptance remains pending; neural inference is disabled.** The inferred neural-runtime ABI still requires validation. Detail-Only mode is disabled pending CUDA interop repair.
+The UXP frontend, bounded Imaging API orchestration, C++ tile processor, diagnostic Node-API binding, and real Adobe UXP addon are implemented. The `.uxpaddon` builds against the locally installed Adobe SDK and is staged with matching debugging symbols. Neural integration requires a verified runtime contract; the inferred ABI must not be called. Detail-Only mode is disabled pending CUDA interop repair.
 
 Start with the [complete offline UXP setup and implementation guide](docs/OFFLINE_UXP_IMPLEMENTATION_GUIDE.md), including full source, SDK staging, build commands, directory-junction checks, file-log monitoring and Visual Studio native debugging. See [implementation status and contracts](docs/IMPLEMENTATION_STATUS.md) for exact coverage and limitations.
 

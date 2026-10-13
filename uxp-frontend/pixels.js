@@ -84,9 +84,10 @@ function blend(source, enhanced, width, height, bounds, layerBounds, config) {
   return enhanced;
 }
 function displayBytes(pixels) {
-  const result = new Uint8ClampedArray(pixels.length);
+  const result = new Uint8Array(pixels.length);
   for (let i = 0; i < pixels.length; ++i) {
     const value = pixels[i];
+    if (!Number.isFinite(value)) throw new Error("Preview contains non-finite pixels.");
     const encoded = i % 4 === 3 ? value : (value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055);
     result[i] = Math.round(Math.max(0, Math.min(1, encoded)) * 255);
   }

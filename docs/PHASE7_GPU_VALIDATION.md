@@ -1,5 +1,11 @@
 # Phase 7: Photoshop acceptance with D3D12 validation copies
 
+## Current revision status — 13 October 2026
+
+The initial success below predates subsequent preview/writeback regressions. The current frontend has 25 passing mocked-host tests and awaits a fresh Photoshop run. Preview uses an owned 8-bit buffer with a narrowly scoped ImageBlob constructor compatibility retry. Output verification now reads a bounded written core and maps its witness pixel against returned bounds, replacing the misleading 1x1 check. Unexpected metadata includes actual dimensions, resolution level and coordinates; failures still roll back. See the [master context](../GASLIGHTR_AGENT_CONTEXT.md) for the complete current contract and Phase 8A/8B decision. Historical test counts below refer to their original runs.
+
+## Earlier live acceptance and procedure
+
 Implemented and GPU-tested on 13 October 2026. The user subsequently confirmed live acceptance in Photoshop 2024 on the RTX 4080 SUPER: a 1024x1024 32-bit RGB sRGB canvas processed successfully, all four tiles joined without visible defects at x=960/y=960 at 100% and 200%, and one undo/redo removed/restored the complete validation layer. The user reported no observed instability or leaks during that run; sustained memory usage and broader edge cases remain to be measured.
 
 Preview exposed an unsupported `context.createImageData` call. The frontend now displays the split RGBA preview through Adobe's documented `ImageBlob` and an HTML image element, releasing replaced object URLs. This preview fix still needs confirmation inside Photoshop. Preview bytes remain an 8-bit display conversion; document pixels continue through the existing float pipeline.
