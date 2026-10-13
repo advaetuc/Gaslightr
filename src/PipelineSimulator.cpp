@@ -46,6 +46,8 @@
 // =============================================================================
 
 #include "PipelineSimulator.h"
+#include "BackendCapabilities.h"
+#include "shaders/EnhanceCS_Bytecode.h"
 
 #include <cassert>
 #include <cstring>   // memset, memcpy
@@ -585,6 +587,189 @@ DX12Result PipelineSimulator::EvaluateFrame(const NVNGX_EvaluationInputs& inputs
     return DX12Result::Success();
 }
 
+DX12Result PipelineSimulator::InitializeComputePipeline()
+{
+    if (m_computePSO && m_computeRootSig && m_computeDescHeap) {
+        return DX12Result::Success();
+    }
+
+    ID3D12Device* device = m_ctx.GetDevice();
+    if (!device) {
+        return DX12Result::Fail(E_POINTER, L"Null D3D12 device.");
+    }
+
+    // Parameter 0: 32-bit constants (b0) -> width, height, intensity, structure
+    D3D12_ROOT_PARAMETER rootParams[3]{};
+
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Parameter 1: Descriptor Table for Input Texture SRV (t0)
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 1;
+    srvRange.BaseShaderRegister = 0;
+    srvRange.RegisterSpace = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Parameter 2: Descriptor Table for Output Texture UAV (u0)
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 1;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
+    rootSigDesc.NumParameters = 3;
+    rootSigDesc.pParameters = rootParams;
+    rootSigDesc.NumStaticSamplers = 0;
+    rootSigDesc.pStaticSamplers = nullptr;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    Microsoft::WRL::ComPtr<ID3DBlob> serializedRootSig;
+    Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+        &serializedRootSig, &errorBlob);
+    if (FAILED(hr)) {
+        return DX12Result::Fail(hr, L"Failed to serialize compute root signature.");
+    }
+
+    hr = device->CreateRootSignature(0,
+        serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(),
+        IID_PPV_ARGS(&m_computeRootSig));
+    if (FAILED(hr)) {
+        return DX12Result::Fail(hr, L"Failed to create compute root signature.");
+    }
+
+    // Compute Pipeline State Object
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = m_computeRootSig.Get();
+    psoDesc.CS.pShaderBytecode = g_EnhanceCS_Bytecode;
+    psoDesc.CS.BytecodeLength = sizeof(g_EnhanceCS_Bytecode);
+    psoDesc.NodeMask = 0;
+    psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+    hr = device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&m_computePSO));
+    if (FAILED(hr)) {
+        return DX12Result::Fail(hr, L"Failed to create compute pipeline state.");
+    }
+
+    // Descriptor Heap
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors = 16;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    hr = device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_computeDescHeap));
+    if (FAILED(hr)) {
+        return DX12Result::Fail(hr, L"Failed to create compute descriptor heap.");
+    }
+
+    m_descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    return DX12Result::Success();
+}
+
+DX12Result PipelineSimulator::DispatchEnhancePass(
+    ID3D12Resource* pInputTexture,
+    ID3D12Resource* pOutputTexture,
+    uint32_t width,
+    uint32_t height,
+    float intensity,
+    float structure,
+    D3D12_RESOURCE_STATES outputStateBefore)
+{
+    if (!pInputTexture || !pOutputTexture) {
+        return DX12Result::Fail(E_INVALIDARG, L"DispatchEnhancePass: null texture arguments.");
+    }
+
+    auto initRes = InitializeComputePipeline();
+    if (!initRes) return initRes;
+
+    ID3D12Device* device = m_ctx.GetDevice();
+    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+    // Slot 0: SRV for input
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandleSRV = m_computeDescHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    device->CreateShaderResourceView(pInputTexture, &srvDesc, cpuHandleSRV);
+
+    // Slot 1: UAV for output
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandleUAV = cpuHandleSRV;
+    cpuHandleUAV.ptr += m_descriptorSize;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uavDesc.Texture2D.MipSlice = 0;
+    device->CreateUnorderedAccessView(pOutputTexture, nullptr, &uavDesc, cpuHandleUAV);
+
+    if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset))
+        return DX12Result::Fail(reset, L"Command allocator reset failed.");
+    if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset))
+        return DX12Result::Fail(reset, L"Command list reset failed.");
+
+    auto* list = m_ctx.GetCommandList();
+
+    // Transition output to UAV
+    TransitionBarrier(list, pOutputTexture, outputStateBefore, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    list->SetPipelineState(m_computePSO.Get());
+    list->SetComputeRootSignature(m_computeRootSig.Get());
+
+    ID3D12DescriptorHeap* heaps[] = { m_computeDescHeap.Get() };
+    list->SetDescriptorHeaps(1, heaps);
+
+    struct {
+        uint32_t width;
+        uint32_t height;
+        float intensity;
+        float structure;
+    } filterConstants{ width, height, intensity, structure };
+    list->SetComputeRoot32BitConstants(0, 4, &filterConstants, 0);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandleSRV = m_computeDescHeap->GetGPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandleUAV = gpuHandleSRV;
+    gpuHandleUAV.ptr += m_descriptorSize;
+
+    list->SetComputeRootDescriptorTable(1, gpuHandleSRV);
+    list->SetComputeRootDescriptorTable(2, gpuHandleUAV);
+
+    const uint32_t groupsX = (width + 15) / 16;
+    const uint32_t groupsY = (height + 15) / 16;
+    list->Dispatch(groupsX, groupsY, 1);
+
+    // Transition output to readable for subsequent readback or shader sampling
+    TransitionBarrier(list, pOutputTexture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable);
+
+    if (const HRESULT close = list->Close(); FAILED(close))
+        return DX12Result::Fail(close, L"Command list close failed.");
+    ID3D12CommandList* lists[] = { list };
+    m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
+    if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
+
+    return DX12Result::Success();
+}
+
 DX12Result PipelineSimulator::ExecuteFullPipeline(
     ID3D12Resource*         pInputTexture,
     ID3D12Resource**        ppOutputTexture,
@@ -604,24 +789,68 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
     if (m_consumed) {
         return DX12Result::Fail(E_NOT_VALID_STATE, L"Allocate fresh synthetic resources before processing another tile.");
     }
-    if (config.warmupFrames < 24 || config.warmupFrames > 32 ||
-        config.enhancePasses < 1 || config.enhancePasses > 4) {
-        return DX12Result::Fail(E_INVALIDARG, L"Expected 24-32 warmup frames and 1-4 enhancement passes.");
-    }
-    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
-        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    // Each resource set is single-use: AllocateSyntheticResources resets states
-    // before another tile. The DLL contract must preserve caller-owned states.
-
-    NeuralBackend& backend = NeuralBackend::GetInstance();
-    if (!config.validationOnly && !backend.IsReady()) {
-        return DX12Result::Fail(E_NOT_VALID_STATE,
-            L"NeuralBackend is not ready.");
-    }
     m_consumed = true;
 
     const uint32_t w = m_synth.width;
     const uint32_t h = m_synth.height;
+    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+    // ── Diagnostic / Validation Copy Fallback ────────────────────────────
+    if (config.validationOnly) {
+        if (const HRESULT reset = m_ctx.GetCommandAllocator()->Reset(); FAILED(reset)) return DX12Result::Fail(reset, L"Command allocator reset failed.");
+        if (const HRESULT reset = m_ctx.GetCommandList()->Reset(m_ctx.GetCommandAllocator(), nullptr); FAILED(reset)) return DX12Result::Fail(reset, L"Command list reset failed.");
+
+        NVNGX_EvaluationInputs inputs{};
+        inputs.pColorInput = pInputTexture;
+
+        TransitionBarrier(m_ctx.GetCommandList(), m_synth.pingTexture.Get(),
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        auto evalResult = EvaluateFrame(inputs, m_synth.pingTexture.Get(), true);
+        if (!evalResult) return evalResult;
+
+        TransitionBarrier(m_ctx.GetCommandList(), m_synth.pingTexture.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable);
+
+        if (const HRESULT close = m_ctx.GetCommandList()->Close(); FAILED(close)) return DX12Result::Fail(close, L"Command list close failed.");
+        ID3D12CommandList* lists[] = { m_ctx.GetCommandList() };
+        m_ctx.GetCommandQueue()->ExecuteCommandLists(1, lists);
+        if (const auto wait = m_ctx.WaitForGPU(); !wait) return wait;
+
+        *ppOutputTexture = m_synth.pingTexture.Get();
+        return DX12Result::Success();
+    }
+
+    // ── Direct3D 12 Compute Shader Local Enhancement (Phase 8A/8B) ───────
+    if (!kNeuralInferenceAvailable) {
+        ID3D12Resource* currentInput = pInputTexture;
+        ID3D12Resource* currentOutput = m_synth.pingTexture.Get();
+        const uint32_t passes = (config.enhancePasses > 0) ? config.enhancePasses : 1;
+
+        for (uint32_t pass = 0; pass < passes; ++pass) {
+            currentOutput = (pass % 2 == 0) ? m_synth.pingTexture.Get() : m_synth.pongTexture.Get();
+            D3D12_RESOURCE_STATES beforeState = (pass < 2) ? D3D12_RESOURCE_STATE_COMMON : readable;
+            auto enhanceResult = DispatchEnhancePass(
+                currentInput, currentOutput,
+                w, h, config.intensity, config.structure, beforeState);
+            if (!enhanceResult) return enhanceResult;
+            currentInput = currentOutput;
+        }
+
+        *ppOutputTexture = currentOutput;
+        return DX12Result::Success();
+    }
+
+    if (config.warmupFrames < 24 || config.warmupFrames > 32 ||
+        config.enhancePasses < 1 || config.enhancePasses > 4) {
+        return DX12Result::Fail(E_INVALIDARG, L"Expected 24-32 warmup frames and 1-4 enhancement passes.");
+    }
+
+    NeuralBackend& backend = NeuralBackend::GetInstance();
+    if (!backend.IsReady()) {
+        return DX12Result::Fail(E_NOT_VALID_STATE,
+            L"NeuralBackend is not ready.");
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // STAGE 1:  TEMPORAL WARMUP

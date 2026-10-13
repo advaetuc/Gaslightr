@@ -53,6 +53,10 @@ struct SimulatorConfig {
     // If true, write inverse-jitter motion vectors each frame.
     // If false, motion vectors are zeroed (simpler but lower quality).
     bool     useInverseMotion = true;
+
+    // Phase 8A/8B parameters for GPU compute enhancement:
+    float    intensity = 0.0f;
+    float    structure = 0.0f;
 };
 
 // ── Synthetic resource set ───────────────────────────────────────────────────
@@ -138,6 +142,22 @@ private:
     DX12Context& m_ctx;
     SyntheticResources m_synth;
     bool m_consumed = false;
+
+    // ── Compute Shader pipeline for local enhancement (Phase 8A/8B) ──────
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>  m_computeRootSig;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  m_computePSO;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_computeDescHeap;
+    uint32_t                                     m_descriptorSize = 0;
+
+    DX12Result InitializeComputePipeline();
+    DX12Result DispatchEnhancePass(
+        ID3D12Resource* pInputTexture,
+        ID3D12Resource* pOutputTexture,
+        uint32_t width,
+        uint32_t height,
+        float intensity,
+        float structure,
+        D3D12_RESOURCE_STATES outputStateBefore = D3D12_RESOURCE_STATE_COMMON);
 
     // ── Internal: fill a GPU texture via upload buffer ────────────────────
     DX12Result CreateAndFillTexture(

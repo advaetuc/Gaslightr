@@ -58,60 +58,6 @@ struct ReadbackMapping {
     TileResources& tile;
     ~ReadbackMapping() { memory.UnmapReadback(tile); }
 };
-void ApplyLocalEnhancement(std::span<const float> source, std::vector<float>& target, const TileRequest& request) {
-    const uint32_t width = request.width;
-    const uint32_t height = request.height;
-    if (width == 0 || height == 0 || target.size() != source.size()) return;
-
-    const size_t stride = static_cast<size_t>(width) + 1;
-    std::vector<double> integral((static_cast<size_t>(width) + 1) * (static_cast<size_t>(height) + 1), 0.0);
-
-    for (uint32_t y = 0; y < height; ++y) {
-        double rowSum = 0.0;
-        for (uint32_t x = 0; x < width; ++x) {
-            const size_t idx = (static_cast<size_t>(y) * width + x) * 4;
-            const double r = target[idx];
-            const double g = target[idx + 1];
-            const double b = target[idx + 2];
-            const double lum = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
-            rowSum += lum;
-            integral[(static_cast<size_t>(y) + 1) * stride + (x + 1)] =
-                integral[static_cast<size_t>(y) * stride + (x + 1)] + rowSum;
-        }
-    }
-
-    const float strength = request.intensity;
-    const float structureScale = request.structure;
-
-    for (uint32_t y = 0; y < height; ++y) {
-        const uint32_t y0 = (y >= 3) ? (y - 3) : 0;
-        const uint32_t y1 = (y + 4 < height) ? (y + 4) : height;
-        for (uint32_t x = 0; x < width; ++x) {
-            const uint32_t x0 = (x >= 3) ? (x - 3) : 0;
-            const uint32_t x1 = (x + 4 < width) ? (x + 4) : width;
-            const double area = static_cast<double>((x1 - x0) * (y1 - y0));
-
-            const double sum = integral[y1 * stride + x1]
-                             - integral[y0 * stride + x1]
-                             - integral[y1 * stride + x0]
-                             + integral[y0 * stride + x0];
-            const double mean = (area > 0.0) ? (sum / area) : 0.0;
-
-            const size_t idx = (static_cast<size_t>(y) * width + x) * 4;
-            const double lum = 0.2126729 * target[idx]
-                             + 0.7151522 * target[idx + 1]
-                             + 0.0721750 * target[idx + 2];
-            const float detail = static_cast<float>(lum - mean);
-
-            for (size_t c = 0; c < 3; ++c) {
-                const float srcVal = source[idx + c];
-                const float gpuVal = target[idx + c];
-                target[idx + c] = srcVal + strength * (gpuVal + structureScale * detail - srcVal);
-            }
-            target[idx + 3] = source[idx + 3];
-        }
-    }
-}
 }
 
 std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& request) {
@@ -144,7 +90,9 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
     Drain drain{ context };
     Require(simulator.AllocateSyntheticResources(request.width, request.height));
     SimulatorConfig config;
-    config.validationOnly = !kNeuralInferenceAvailable;
+    config.validationOnly = request.validationOnly;
+    config.intensity = request.intensity;
+    config.structure = request.structure;
     if (kNeuralInferenceAvailable) {
         const auto runtime = RuntimePath();
         if (!std::filesystem::is_regular_file(runtime))
@@ -153,7 +101,11 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
         if (!backend.Initialize(runtime.c_str(), context.GetDevice(), &init))
             throw std::runtime_error(Utf8(backend.GetLastError()));
     } else {
-        OutputDebugStringA("[Gaslightr] D3D12 validation copy; neural DLL is not loaded.\n");
+        if (config.validationOnly) {
+            OutputDebugStringA("[Gaslightr] D3D12 validation copy; neural DLL is not loaded.\n");
+        } else {
+            OutputDebugStringA("[Gaslightr] D3D12 compute shader enhancement; neural DLL is not loaded.\n");
+        }
     }
     Begin(context);
     Require(memory.UploadToGPU(tile, rgba.data(), request.width * 4 * sizeof(float), SourcePixelFormat::RGBA_32F, context.GetCommandList()));
@@ -178,9 +130,6 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
             result[i] = (x % 4 == 3) ? rgba[i] : DecodeHalf(row[x]);
             if (!std::isfinite(result[i])) throw std::runtime_error("The GPU pipeline returned non-finite pixels.");
         }
-    }
-    if (!request.validationOnly) {
-        ApplyLocalEnhancement(rgba, result, request);
     }
     Require(context.WaitForGPU());
     return result;

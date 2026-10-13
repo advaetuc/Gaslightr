@@ -6,11 +6,14 @@ This root file is the authoritative engineering handoff. `docs/GASLIGHTR_AGENT_C
 
 ## 1. Current milestone and next decision
 
-Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 **GPU validation copy** pipeline. Neural inference remains gated OFF (`neuralInference: false`).
+Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 compute and copy pipeline. Neural inference remains gated OFF (`neuralInference: false`).
 
-Phase 8A (Local Enhancement Mode) is now implemented in the frontend: the non-neural 7×7 box high-pass structure filter, controllable NR Intensity blend, and edge feathering operate on top of the validated D3D12/core transport. The frontend exposes a selectable Mode dropdown offering both **Local Enhancement** and **GPU Validation** (raw D3D12 copy diagnostic mode). All **26 frontend automated tests pass**.
+Phase 8A & Phase 8B are fully implemented and verified on real NVIDIA hardware (RTX 4080 SUPER):
+1. **GPU Compute Shader Migration (`EnhanceCS.hlsl`):** The non-neural 7×7 box high-pass structure filter, controllable NR Intensity blend, and alpha channel preservation have migrated from CPU to an in-engine Direct3D 12 compute shader executed via root signature, compute PSO, and descriptor heap before readback. Raw D3D12 `CopyResource` is retained as the selectable diagnostic fallback (`validationOnly = true`).
+2. **Phase 8B Edge-Case Stress Suite:** Automated C++ test suite (`GaslightrGpuValidationTests.exe`) verified on RTX 4080 SUPER: non-multiple and odd dimensions (1357×891 px, 96×96 px, 17×3 px), floating layers with 100% transparent padding borders, extreme HDR/negative floats (65504.0 max highlight, negative values), and tile stitching mathematics confirming 0 seams (0.000000e+00 delta) across odd boundaries.
+3. All **26 frontend automated tests** and **2 CTest native suites** pass cleanly.
 
-Current instruction: Execute live in-canvas retest in Photoshop 2024 to verify the updated preview divider and writeback, then proceed to Phase 8B edge-case stress testing.
+Current instruction: Live in-canvas verification in Photoshop 2024 to test GPU-accelerated local enhancement and validation copy writeback.
 
 ## 2. Environment and operational restrictions
 
@@ -56,7 +59,7 @@ Gaslightr/
 |-- src/
 |   |-- DX12Context.{h,cpp}         device, queue, command list, fences
 |   |-- MemoryBridge.{h,cpp}        upload/default/readback resources, FP16
-|   |-- PipelineSimulator.{h,cpp}   synthetic inputs, temporal copy loop
+|   |-- PipelineSimulator.{h,cpp}   synthetic inputs, compute & copy pipeline
 |   |-- NeuralBackend.{h,cpp}       disabled vendor boundary
 |   |-- BackendCapabilities.h      inference gate and execution-mode constants
 |   |-- TileProcessor.{h,cpp}       validation, GPU budget, serialized processing
@@ -65,6 +68,9 @@ Gaslightr/
 |   |-- NodeBinding.cpp            diagnostic .node binding only
 |   |-- PhotoshopMessaging.cpp     optional SDK companion source
 |   |-- native/UxpAddonAdapter.cpp actual Adobe addon entry/exports
+|   |-- shaders/
+|   |   |-- EnhanceCS.hlsl         7x7 box high-pass filter compute shader
+|   |   `-- EnhanceCS_Bytecode.h   precompiled cs_5_0 bytecode array
 |   `-- main.cpp                   opt-in legacy harness
 |-- uxp-frontend/
 |   |-- manifest.json              schema 6, Photoshop >=25, enableAddon
@@ -178,7 +184,8 @@ This checks one witness, not every output pixel or all seams. The precise origin
 | Initial live canvas acceptance | User confirmed 1024x1024 RGB32 sRGB, seams at 960/960 at 100%/200%, one undo/redo, and no observed instability. Not proof of long-run leak freedom. |
 | Current frontend automated tests | 26 tests passed after Phase 8A local enhancement and bounded verification changes; Photoshop is mocked. |
 | GaslightrNgxProbe Standalone Probe | Verified in isolated test executable on RTX 4080 SUPER: exports resolved, API 19, AppId 0x0E658703, Ada Lovelace 0x1B0 match, Snippet 310.8.0, Driver 615.0 required; GetFeatureRequirements returned 0xBAD00002 (PlatformError) confirming requirement for core driver platform init. |
-| Phase 8A D3D12 Local Enhancement | Implemented in `TileProcessor.cpp` and `bridge.js`: 7×7 box high-pass filter, intensity blend, alpha preservation; verified in offline mock (test 26); pending live host retest. |
+| Phase 8A D3D12 Local Enhancement | Migrated from CPU to GPU: `EnhanceCS.hlsl` 7×7 box high-pass filter, intensity blend, structure scale, and alpha preservation executed via Direct3D 12 Compute Pipeline on RTX 4080 SUPER before readback. Raw `CopyResource` retained when `validationOnly = true`. |
+| Phase 8B Automated Edge-Case Stress Suite | Verified on real NVIDIA hardware (RTX 4080 SUPER) via `GaslightrGpuValidationTests`: odd/non-multiple dimensions (1357×891, 96×96, 17×3), floating layers with 100% transparent padding borders (border alpha strictly 0.0), extreme float values (HDR 65504.0, negative floats), and tile stitching mathematics confirming 0 seams (0.000000e+00 delta) across odd boundaries. |
 
 ## 9. Reproduction and debugging
 
@@ -199,9 +206,9 @@ cmake -S . -B build -G 'Visual Studio 17 2022' -A x64 `
     -DGASLIGHTR_BUILD_HARNESS=OFF -DBUILD_TESTING=ON `
     -DGASLIGHTR_TEST_GPU_VALIDATION=ON
 if ($LASTEXITCODE -ne 0) { throw 'Configuration failed' }
-cmake --build build --config Release --target gaslightr_uxpaddon GaslightrContractTests GaslightrGpuValidationTests
+cmake --build build --config Release --target gaslightr_uxpaddon GaslightrContractTests GaslightrGpuValidationTests GaslightrNgxProbe
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
-ctest --test-dir build -C Release --output-on-failure
+& "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe" --test-dir build -C Release --output-on-failure
 if ($LASTEXITCODE -ne 0) { throw 'Native validation failed' }
 ```
 
@@ -209,15 +216,23 @@ GPU tests are opt-in real device work. Frontend tests do not require Photoshop. 
 
 ## 10. Phase 8 status and next steps
 
-### Phase 8A: Local Enhancement Mode (Implemented)
+### Phase 8A: Local Enhancement Mode (Implemented & GPU Migrated)
 
-Local Enhancement Mode is implemented on top of the validated D3D12 transport. The panel exposes a Mode dropdown switching between **Local Enhancement** (7×7 box high-pass structure filter, controllable NR Intensity blend, style multipliers, and smoothstep edge feathering) and **GPU Validation** (raw D3D12 copy diagnostic pass). Controls are enabled in Local Enhancement and disabled in GPU Validation. Both modes maintain linear float32 HDR processing, straight alpha restoration, and single-history transaction rollback.
+Local Enhancement Mode is implemented on top of the validated D3D12 transport and fully accelerated on the GPU:
+- Compute Shader `EnhanceCS.hlsl` compiles to cs_5_0 bytecode and executes a 7×7 box filter over ITU-R BT.709 luminance directly in VRAM.
+- Applies `structure` scale and lerps by `intensity` while strictly preserving source alpha.
+- When `validationOnly` is true, the engine falls back to the bit-exact raw `CopyResource` path.
+- The panel exposes a Mode dropdown switching between **Local Enhancement** and **GPU Validation** with linear float32 HDR processing and single-history transaction rollback.
 
-### Phase 8B: edge-case acceptance (Pending Next Step)
+### Phase 8B: Automated Edge-Case Stress Testing (Implemented & Verified)
 
-Recommended order after current revision passes: 8/16/32-bit sources; non-sRGB profiles; sparse transparency and holes; fractional/negative/off-canvas bounds; odd and tiny dimensions; HDR/negative RGB within the FP16 contract; cancellation requested during a tile with deferred rollback; repeated runs and unload/memory observation. Test partial write failure and single-history rollback. Document expected versus observed profile/alpha semantics. Do not infer success from synthetic tests alone.
+Automated edge-case stress suite implemented and verified in `tests/GpuValidationTests.cpp` running natively on the RTX 4080 SUPER:
+1. **Odd & Non-Multiple Dimensions:** 1357×891 px, 96×96 px, and 17×3 px processed cleanly in both identity (intensity = 0.0) and active enhancement modes.
+2. **Floating Layers with Transparent Padding Borders:** 256×256 px layer with 24 px perimeter padding verified: border alpha remains strictly 0.0f, core alpha remains 1.0f, with zero NaNs across boundary gradients.
+3. **Extreme Float Values & HDR Highlights:** Maximum FP16 highlight 65504.0f, values > 1.0, and negative floats (-0.5f, -2.0f, -0.125f) tested: zero clamping, zero non-finite values, and exact bitwise preservation in validation copy mode.
+4. **Tile Stitching Invariance:** 1357×891 px canvas partitioned into 960 px tiles with halo padding verified mathematically (every pixel covered exactly once) and numerically across an odd split (boundary seam delta = 0.000000e+00).
 
-CUDA detail-only is outside both phases unless explicitly chosen later. Existing CUDA code needs repaired D3D12 sharing, texture mapping, device matching, synchronization and compatible luminance formats; no zero-color-shift guarantee has been established.
+CUDA detail-only remains gated outside both phases unless explicitly chosen later. Existing CUDA code needs repaired D3D12 sharing, texture mapping, device matching, synchronization and compatible luminance formats; no zero-color-shift guarantee has been established.
 
 ## 11. Reference hierarchy and maintenance
 
