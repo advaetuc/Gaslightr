@@ -1,5 +1,11 @@
 # Implementation status — 12 October 2026
 
+## 13 October: GPU validation mode
+
+This update supersedes the earlier runtime/host status below. The user confirmed Photoshop addon loading and all six native boundary checks. The neural backend is now disabled before DLL loading; `PipelineSimulator` performs explicit GPU copies through the temporal and ping-pong loops. Capabilities report `neuralInference: false` and `executionMode: d3d12-validation-copy`. JS postprocessing is bypassed and the UI/output/history are labeled validation. Input/output remains RGBA32F with RGBA16F GPU storage and original alpha restoration.
+
+Release addon and matching PDB are staged. Both CTests (including real GPU transfers on the RTX 4080 SUPER) and all 18 frontend/Node tests passed. Both requested copies of the neural DLL are present with identical hashes but are not loaded by this path. Live Photoshop canvas, profile, seam and undo acceptance remains pending; follow [Phase 7 instructions](PHASE7_GPU_VALIDATION.md).
+
 The Adobe SDKs are now installed in `C:\SDKs\Adobe\Photoshop` and `C:\SDKs\Adobe\UXP-Hybrid`. A real Adobe UXP adapter has been compiled and staged; the [offline implementation guide](OFFLINE_UXP_IMPLEMENTATION_GUIDE.md) supersedes the earlier SDK installation instructions. None of the tests establish successful DLSS 5 inference or Photoshop host integration.
 
 ## Implemented and checked

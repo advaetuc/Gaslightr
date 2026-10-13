@@ -3,15 +3,17 @@
 const { createBridge } = require("./bridge.js");
 const { displayBytes } = require("./pixels.js");
 let addon;
-const bridge = createBridge(require("photoshop"), () => {
-  if (!addon) addon = require("gaslightr.uxpaddon");
+const bridge = createBridge(require("photoshop"), async () => {
+  if (!addon) addon = await require("gaslightr.uxpaddon");
   return addon;
 });
 const state = { intensity: 0.5, structure: 0, feather: 0, style: "default", preset: 0, detailOnly: false };
 const element = id => document.getElementById(id);
-let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false, dragging = false;
+let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false, dragging = false, validationMode = false;
+let previewUrl = null;
 const status = message => {
-  element("status").textContent = message;
+  element("status").value = String(message);
+  element("status").scrollTop = 0;
   console.log(`[Gaslightr] ${new Date().toISOString()} ${message}`);
 };
 console.log("[Gaslightr] panel script loaded");
@@ -42,24 +44,38 @@ function schedule() {
   timer = setTimeout(() => { if (!bridge.isBusy()) run(false); }, 350);
 }
 function draw() {
-  const canvas = element("preview"), context = canvas.getContext("2d");
-  if (!context || !preview) return;
+  const image = element("preview");
+  if (!preview) {
+    image.removeAttribute("src");
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+    return;
+  }
   const { width, height } = preview;
-  canvas.width = width; canvas.height = height;
-  const frame = context.createImageData(width, height), cut = Math.round(width * split);
-  frame.data.set(displayBytes(preview.output));
+  const frame = displayBytes(preview.output), cut = Math.round(width * split);
   const before = displayBytes(preview.input);
-  for (let y = 0; y < height; ++y) frame.data.set(before.subarray(y * width * 4, (y * width + cut) * 4), y * width * 4);
-  context.putImageData(frame, 0, 0);
+  for (let y = 0; y < height; ++y)
+    frame.set(before.subarray(y * width * 4, (y * width + cut) * 4), y * width * 4);
+  const blob = new ImageBlob(frame.buffer, {
+    type: "image/uncompressed", width, height, components: 4,
+    componentSize: 8, pixelFormat: "RGBA", colorSpace: "RGB",
+    colorProfile: "sRGB IEC61966-2.1", hasAlpha: true
+  });
+  const nextUrl = URL.createObjectURL(blob);
+  try { image.src = nextUrl; }
+  catch (error) { URL.revokeObjectURL(nextUrl); throw error; }
+  const previousUrl = previewUrl;
+  previewUrl = nextUrl;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
 }
 async function run(apply) {
   if (bridge.isBusy()) return;
   clearTimeout(timer); pendingPreview = false;
   const current = ++revision;
   element("apply").disabled = element("refresh").disabled = true; element("cancel").disabled = false;
-  status(apply ? "Enhancing layer…" : "Rendering preview…");
+  status(apply ? (validationMode ? "Running GPU validation…" : "Enhancing layer…") : "Rendering preview…");
   try {
-    if (apply) { await bridge.apply({ ...state }); status("Enhanced layer created."); }
+    if (apply) { await bridge.apply({ ...state }); status(validationMode ? "GPU validation layer created. No neural inference ran." : "Enhanced layer created."); }
     else {
       const result = await bridge.preview({ ...state });
       if (revision === current) { preview = result; draw(); status(result ? "Drag across the preview to compare." : "No pixels in the preview region."); }
@@ -80,18 +96,43 @@ element("nativeCheck").addEventListener("click", async () => {
 });
 element("apply").addEventListener("click", () => run(true));
 element("cancel").addEventListener("click", () => { pendingPreview = false; clearTimeout(timer); ++revision; bridge.cancel(); status("Cancelling after the current tile…"); });
-const canvas = element("preview");
-function compare(event) { const bounds = canvas.getBoundingClientRect(); split = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)); draw(); }
-canvas.addEventListener("mousedown", event => { dragging = true; compare(event); });
-canvas.addEventListener("mousemove", event => { if (dragging) compare(event); });
-document.addEventListener("mouseup", () => { dragging = false; });
-try {
-  const caps = bridge.capabilities();
-  console.log(`[Gaslightr] native capabilities ${JSON.stringify(caps)}`);
-  element("detailOnly").disabled = !caps.detailOnly;
-  element("detailStatus").textContent = caps.detailOnly ? "" : caps.detailOnlyReason;
-} catch (error) {
-  element("detailOnly").disabled = true;
-  element("detailStatus").textContent = "Requires the native addon and validated CUDA interop.";
-  status(error.message);
+const previewImage = element("preview");
+function compare(event) {
+  const bounds = previewImage.getBoundingClientRect();
+  if (!preview || bounds.width <= 0) return;
+  split = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+  try { draw(); }
+  catch (error) { dragging = false; status(error.message || String(error)); }
 }
+previewImage.addEventListener("mousedown", event => { dragging = true; compare(event); });
+previewImage.addEventListener("mousemove", event => { if (dragging) compare(event); });
+previewImage.addEventListener("error", () => status("Preview image could not be displayed. Document processing is unaffected."));
+window.addEventListener("unload", () => {
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+});
+document.addEventListener("mouseup", () => { dragging = false; });
+async function initializeNativeStatus() {
+  try {
+    const caps = await bridge.capabilities();
+    console.log(`[Gaslightr] native capabilities ${JSON.stringify(caps)}`);
+    validationMode = caps.executionMode === "d3d12-validation-copy";
+    element("backendStatus").textContent = validationMode
+      ? "GPU validation mode · neural inference off"
+      : (caps.neuralInference === false ? caps.neuralInferenceReason : "Neural processing");
+    if (validationMode) {
+      element("enhancementSettings").style.display = "none";
+      element("precisionNote").textContent = "RGB passes through FP16 textures. Original alpha is preserved.";
+      element("apply").textContent = "Create validation layer";
+      for (const control of document.querySelectorAll("#controls sp-slider, #controls input, #style, #preset")) control.disabled = true;
+    }
+    element("detailOnly").disabled = !caps.detailOnly;
+    element("detailStatus").textContent = caps.detailOnly ? "" : caps.detailOnlyReason;
+  } catch (error) {
+    element("backendStatus").textContent = "Native processing unavailable.";
+    element("detailOnly").disabled = true;
+    element("detailStatus").textContent = "Requires the native addon and validated CUDA interop.";
+    status(error.message);
+  }
+}
+initializeNativeStatus();

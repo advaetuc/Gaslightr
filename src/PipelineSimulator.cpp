@@ -555,6 +555,36 @@ DX12Result PipelineSimulator::UpdateMotionVectors(
 //      5. WaitForGPU
 //    ppOutputTexture receives the final result buffer.
 //
+DX12Result PipelineSimulator::EvaluateFrame(const NVNGX_EvaluationInputs& inputs,
+    ID3D12Resource* output, bool validationOnly)
+{
+    if (!validationOnly) {
+        auto parameters = inputs;
+        return NeuralBackend::GetInstance().Evaluate(m_ctx.GetCommandList(), &parameters, output);
+    }
+    if (!inputs.pColorInput || !output || inputs.pColorInput == output)
+        return DX12Result::Fail(E_INVALIDARG, L"Validation copy needs distinct input and output textures.");
+    const auto source = inputs.pColorInput->GetDesc();
+    const auto destination = output->GetDesc();
+    if (source.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+        destination.Dimension != source.Dimension || source.Format != GPU_TEXTURE_FORMAT ||
+        destination.Format != source.Format || destination.Width != source.Width ||
+        destination.Height != source.Height || source.MipLevels != 1 || destination.MipLevels != 1 ||
+        source.DepthOrArraySize != 1 || destination.DepthOrArraySize != 1 ||
+        source.SampleDesc.Count != 1 || destination.SampleDesc.Count != 1)
+        return DX12Result::Fail(E_INVALIDARG, L"Validation copy texture descriptors do not match.");
+    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    auto* list = m_ctx.GetCommandList();
+    TransitionBarrier(list, inputs.pColorInput, readable, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    TransitionBarrier(list, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+    list->CopyResource(output, inputs.pColorInput);
+    TransitionBarrier(list, inputs.pColorInput, D3D12_RESOURCE_STATE_COPY_SOURCE, readable);
+    TransitionBarrier(list, output, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // The enclosing frame closes/submits the list and checks its fence.
+    return DX12Result::Success();
+}
+
 DX12Result PipelineSimulator::ExecuteFullPipeline(
     ID3D12Resource*         pInputTexture,
     ID3D12Resource**        ppOutputTexture,
@@ -584,7 +614,7 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
     // before another tile. The DLL contract must preserve caller-owned states.
 
     NeuralBackend& backend = NeuralBackend::GetInstance();
-    if (!backend.IsReady()) {
+    if (!config.validationOnly && !backend.IsReady()) {
         return DX12Result::Fail(E_NOT_VALID_STATE,
             L"NeuralBackend is not ready.");
     }
@@ -639,15 +669,12 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         TransitionBarrier(m_ctx.GetCommandList(), m_synth.pingTexture.Get(),
             frame == 0 ? D3D12_RESOURCE_STATE_COMMON : readable,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        auto evalResult = backend.Evaluate(
-            m_ctx.GetCommandList(),
-            &inputs,
-            m_synth.pingTexture.Get());    // Warmup always writes to ping.
+        auto evalResult = EvaluateFrame(inputs, m_synth.pingTexture.Get(), config.validationOnly);
 
         if (!evalResult) {
             wchar_t msg[256];
             swprintf_s(msg,
-                L"EvaluateNR failed on warmup frame %u.", frame);
+                L"Pipeline evaluation failed on warmup frame %u.", frame);
             return DX12Result::Fail(evalResult.hr, msg);
         }
 
@@ -718,15 +745,12 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         TransitionBarrier(m_ctx.GetCommandList(), currentOutput,
             pass == 0 ? D3D12_RESOURCE_STATE_COMMON : readable,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        auto evalResult = backend.Evaluate(
-            m_ctx.GetCommandList(),
-            &inputs,
-            currentOutput);
+        auto evalResult = EvaluateFrame(inputs, currentOutput, config.validationOnly);
 
         if (!evalResult) {
             wchar_t msg[256];
             swprintf_s(msg,
-                L"EvaluateNR failed on enhancement pass %u.", pass);
+                L"Pipeline evaluation failed on enhancement pass %u.", pass);
             return DX12Result::Fail(evalResult.hr, msg);
         }
 

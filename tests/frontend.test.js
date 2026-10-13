@@ -49,14 +49,14 @@ test("invalid settings and non-finite GPU data are rejected", () => {
   assert.deepEqual([...p.displayBytes(new Float32Array([-1, 1, 4, 0.5]))], [0, 255, 255, 128]);
 });
 
-function host({ width = 1921, failTile = -1, trim = false } = {}) {
+function host({ width = 1921, failTile = -1, trim = false, asyncAddon = false } = {}) {
   const calls = [], listeners = new Set();
   let modal = false, count = 0, bridge;
   const check = () => assert.equal(modal, true, "Photoshop operation outside modal scope");
   const layer = { id: 7, name: "Source", kind: "normal", boundsNoEffects: { left: -3, top: 2, right: width - 3, bottom: 5 } };
-  const doc = { id: 2, activeLayers: [layer], createLayer: async () => { check(); calls.push("create"); return { id: 8 }; } };
+  const doc = { id: 2, activeLayers: [layer], createLayer: async options => { check(); calls.push("create", ["layerName", options.name]); return { id: 8 }; } };
   const ctx = { isCancelled: false, reportProgress: value => { check(); calls.push(["progress", value.value]); }, hostControl: {
-    suspendHistory: async () => { check(); calls.push("suspend"); return 91; },
+    suspendHistory: async options => { check(); calls.push("suspend", ["historyName", options.name]); return 91; },
     resumeHistory: async (id, commit) => { check(); assert.equal(id, 91); calls.push(["resume", commit]); }
   } };
   const imageData = (bounds, components = 4) => {
@@ -95,7 +95,7 @@ function host({ width = 1921, failTile = -1, trim = false } = {}) {
     capabilities: () => ({ protocol: 1, detailOnly: false, sdkMessaging: true }),
     processTile: async input => { check(); if (++count === failTile) throw new Error("GPU test failure"); if (api.cancel) bridge.cancel(); return input.slice(); }
   };
-  bridge = createBridge(ps, () => api);
+  bridge = createBridge(ps, () => asyncAddon ? Promise.resolve(api) : api);
   return { bridge, api, ps, calls, ctx, listeners };
 }
 test("apply writes non-overlapping chunks and commits one history transaction", async () => {
@@ -144,4 +144,36 @@ test("concurrent operations cannot enter a second modal scope", async () => {
   const running = h.bridge.apply({});
   await assert.rejects(h.bridge.preview({}), /already processing/);
   await running;
+});
+
+test("Promise-based UXP addon loading resolves before capabilities and processing", async () => {
+  const h = host({ asyncAddon: true });
+  assert.equal((await h.bridge.capabilities()).protocol, 1);
+  assert.equal(await h.bridge.apply({}), 8);
+  assert.deepEqual(h.calls.at(-1), ["resume", true]);
+  assert.ok((await h.bridge.preview({})).width > 0);
+});
+
+test("asynchronous addon load failures preserve the loader error and release the modal scope", async () => {
+  const h = host();
+  const bridge = createBridge(h.ps, async () => { throw new Error("Failed to load Addon: dependency unavailable"); });
+  await assert.rejects(bridge.capabilities(), /Cannot load.*dependency unavailable/);
+  await assert.rejects(bridge.checkNative(), /Cannot load.*dependency unavailable/);
+  assert.equal(bridge.isBusy(), false);
+  assert.equal(h.calls.length, 0);
+});
+
+test("GPU validation exposes readback without CPU blending and labels its layer and history", async () => {
+  const h = host();
+  h.api.capabilities = () => ({ protocol: 1, detailOnly: false, neuralInference: false,
+    sdkMessaging: false, executionMode: "d3d12-validation-copy" });
+  const process = h.api.processTile;
+  h.api.processTile = async input => { const result = await process(input); result[0] = 0.25; return result; };
+  const preview = await h.bridge.preview({ intensity: 0, structure: 1 });
+  assert.equal(preview.input[0], 0.5);
+  assert.equal(preview.output[0], 0.25);
+  await h.bridge.apply({});
+  assert.ok(h.calls.some(x => x[0] === "layerName" && x[1] === "Source · Gaslightr GPU validation"));
+  assert.ok(h.calls.some(x => x[0] === "historyName" && x[1] === "Gaslightr GPU validation"));
+  assert.deepEqual(h.calls.at(-1), ["resume", true]);
 });

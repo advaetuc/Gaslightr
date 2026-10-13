@@ -11,10 +11,10 @@ function createBridge(ps, loadNative) {
     try { return await ps.core.executeAsModal(fn, { commandName: name }); }
     finally { busy = false; }
   };
-  function native() {
+  async function native() {
     let api;
-    try { api = loadNative(); } catch (error) {
-      throw new Error(`The Gaslightr UXP native addon is not installed. Complete the SDK setup in docs/SDK_SETUP.md. ${error.message}`);
+    try { api = await loadNative(); } catch (error) {
+      throw new Error(`Cannot load the Gaslightr native addon: ${error.message || String(error)}`);
     }
     if (typeof api.processTile !== "function" || typeof api.capabilities !== "function") throw new Error("Incompatible Gaslightr addon.");
     return api;
@@ -65,7 +65,10 @@ function createBridge(ps, loadNative) {
       checkCancel(context);
       const output = await api.processTile(input, { width, height, preset: config.preset, detailOnly: config.detailOnly });
       checkCancel(context);
-      pixels.blend(input, output, width, height, bounds, src.bounds, config);
+      // Acceptance mode must expose GPU readback, even when intensity is zero.
+      // Otherwise a CPU blend could conceal a broken upload/copy/readback path.
+      if (api.capabilities().executionMode !== "d3d12-validation-copy")
+        pixels.blend(input, output, width, height, bounds, src.bounds, config);
       return { input, output, bounds, width, height };
     } finally { image.imageData.dispose(); }
   }
@@ -78,23 +81,25 @@ function createBridge(ps, loadNative) {
   return {
     isBusy: () => busy,
     cancel: () => { cancelled = true; },
-    capabilities: () => native().capabilities(),
-    checkNative: () => modal("Gaslightr native diagnostics", () => require("./native-checks.js").checkNativeBoundary(native())),
+    capabilities: async () => (await native()).capabilities(),
+    checkNative: () => modal("Gaslightr native diagnostics", async () => require("./native-checks.js").checkNativeBoundary(await native())),
     sendSDKMessage: (command, payload) => modal("Gaslightr native message", () => sendInModal(command, payload)),
     preview: value => modal("Gaslightr preview", async context => {
-      const config = pixels.settings(value), api = native(), caps = validateCapabilities(api, config), src = source();
+      const config = pixels.settings(value), api = await native(), caps = validateCapabilities(api, config), src = source();
       const centerX = Math.floor((src.bounds.left + src.bounds.right) / 2), centerY = Math.floor((src.bounds.top + src.bounds.bottom) / 2);
       const read = pixels.intersect(src.bounds, { left: centerX - 256, top: centerY - 256, right: centerX + 256, bottom: centerY + 256 });
       if (caps.sdkMessaging) await sendInModal("configure", { documentID: src.document.id, layerID: src.layer.id, viewport: read, ...config });
       return tile(api, src, read, config, context);
     }),
     apply: value => modal("Gaslightr enhancement", async context => {
-      const config = pixels.settings(value), api = native(), caps = validateCapabilities(api, config), src = source();
+      const config = pixels.settings(value), api = await native(), caps = validateCapabilities(api, config), src = source();
       if (caps.sdkMessaging) await sendInModal("configure", { documentID: src.document.id, layerID: src.layer.id, bounds: src.bounds, ...config });
-      const history = await context.hostControl.suspendHistory({ documentID: src.document.id, name: "Gaslightr enhancement" });
+      const validation = caps.executionMode === "d3d12-validation-copy";
+      const history = await context.hostControl.suspendHistory({ documentID: src.document.id,
+        name: validation ? "Gaslightr GPU validation" : "Gaslightr enhancement" });
       let committed = false;
       try {
-        const target = await src.document.createLayer({ name: `${src.layer.name} · Gaslightr` });
+        const target = await src.document.createLayer({ name: `${src.layer.name} · Gaslightr${validation ? " GPU validation" : ""}` });
         const step = 960, total = Math.ceil((src.bounds.right - src.bounds.left) / step) * Math.ceil((src.bounds.bottom - src.bounds.top) / step);
         let completed = 0;
         for (const region of pixels.tiles(src.bounds)) {

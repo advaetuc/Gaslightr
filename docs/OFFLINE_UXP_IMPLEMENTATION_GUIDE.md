@@ -1,5 +1,7 @@
 # Gaslightr: offline UXP Hybrid Addon setup and implementation
 
+**13 October update:** the user confirmed addon loading and six native boundary checks inside Photoshop. The current build now uses explicit D3D12 copy validation with neural inference disabled. For the next canvas test, use [Phase 7 GPU validation](PHASE7_GPU_VALIDATION.md); its instructions supersede the neural-runtime prerequisite and enhancement expectations below. Earlier build sizes and verification counts describe the original build.
+
 Validated against the repository and locally installed SDK on **12 October 2026**.
 
 This manual uses local files, CMake, MSVC, Photoshop and Visual Studio's native debugger. It requires no developer port, remote-debugging session, package download, Creative Cloud application, UXP Developer Tool, or GUI packaging tool. The Adobe SDKs and compiler must already be installed.
@@ -191,6 +193,7 @@ The SDK lacks a typed-array-info call, so the adapter obtains `%TypedArray%.prot
 ```cpp
 #include "UxpAddon.h"
 #include "TileProcessor.h"
+#include "BackendCapabilities.h"
 #include <windows.h>
 #include <cmath>
 #include <cstring>
@@ -334,6 +337,12 @@ addon_value Capabilities(addon_env env, addon_callback_info) noexcept {
         Require(UxpAddonApis.uxp_addon_get_boolean(env, false, &value), "Create capability flag");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "detailOnly", value), "Set detailOnly");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "sdkMessaging", value), "Set sdkMessaging");
+        Require(UxpAddonApis.uxp_addon_get_boolean(env, kNeuralInferenceAvailable, &value), "Create inference flag");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "neuralInference", value), "Set neuralInference");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "neuralInferenceReason",
+            String(env, kNeuralInferenceReason)), "Set neuralInferenceReason");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "executionMode",
+            String(env, kExecutionMode)), "Set executionMode");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "detailOnlyReason",
             String(env, "CUDA texture interop requires repair and device validation.")), "Set detailOnlyReason");
         return result;
@@ -469,10 +478,10 @@ Keep Photoshop 25.0 as the minimum, but use the installed hybrid SDK's schema 6:
 The existing loader remains:
 
 ```javascript
-const addon = require("gaslightr.uxpaddon");
+const addon = await require("gaslightr.uxpaddon");
 ```
 
-Use the SDK's platform-aware addon resolution and the `win/x64` bundle layout. Do not load `build/Release/gaslightr.node`, do not rename it, and do not pass pixel arrays through JSON messaging.
+Call this inside an async function, as in the installed SDK sample. Await addon loading before inspecting its functions or calling `capabilities`; checking the unresolved Promise incorrectly reports an incompatible addon. Use the SDK's platform-aware addon resolution and the `win/x64` bundle layout. Do not load `build/Release/gaslightr.node`, do not rename it, and do not pass pixel arrays through JSON messaging.
 
 ### 3.4 Panel diagnostics and logging
 

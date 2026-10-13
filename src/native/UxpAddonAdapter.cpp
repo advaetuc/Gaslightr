@@ -1,5 +1,6 @@
 #include "UxpAddon.h"
 #include "TileProcessor.h"
+#include "BackendCapabilities.h"
 #include <windows.h>
 #include <cmath>
 #include <cstring>
@@ -143,6 +144,12 @@ addon_value Capabilities(addon_env env, addon_callback_info) noexcept {
         Require(UxpAddonApis.uxp_addon_get_boolean(env, false, &value), "Create capability flag");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "detailOnly", value), "Set detailOnly");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "sdkMessaging", value), "Set sdkMessaging");
+        Require(UxpAddonApis.uxp_addon_get_boolean(env, kNeuralInferenceAvailable, &value), "Create inference flag");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "neuralInference", value), "Set neuralInference");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "neuralInferenceReason",
+            String(env, kNeuralInferenceReason)), "Set neuralInferenceReason");
+        Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "executionMode",
+            String(env, kExecutionMode)), "Set executionMode");
         Require(UxpAddonApis.uxp_addon_set_named_property(env, result, "detailOnlyReason",
             String(env, "CUDA texture interop requires repair and device validation.")), "Set detailOnlyReason");
         return result;

@@ -2,7 +2,9 @@
 // Every case fails before runtime loading or GPU work. Safe without an NGX DLL.
 function checkNativeBoundary(api) {
   const caps = api.capabilities();
-  if (caps.protocol !== 1 || caps.detailOnly !== false || caps.sdkMessaging !== false)
+  if (caps.protocol !== 1 || caps.detailOnly !== false || caps.sdkMessaging !== false ||
+      caps.neuralInference !== false || caps.executionMode !== "d3d12-validation-copy" ||
+      typeof caps.neuralInferenceReason !== "string" || !caps.neuralInferenceReason)
     throw new Error("Unexpected addon capabilities.");
   const config = { width: 1, height: 1, preset: 0, detailOnly: false };
   const viewStorage = new Float32Array([NaN, NaN, 0.2, 0.3, 0.4, -0.1, NaN]);

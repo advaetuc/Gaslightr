@@ -2,6 +2,7 @@
 #include "MemoryBridge.h"
 #include "NeuralBackend.h"
 #include "PipelineSimulator.h"
+#include "BackendCapabilities.h"
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -61,9 +62,6 @@ struct ReadbackMapping {
 
 std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& request) {
     ValidateTile(rgba, request);
-    const auto runtime = RuntimePath();
-    if (!std::filesystem::is_regular_file(runtime))
-        throw std::runtime_error("nvngx_dlssnr.dll is missing beside the native module.");
     // The existing NGX backend is process-global; serialize initialization,
     // evaluation and shutdown, including calls from separate JS runtimes.
     const std::lock_guard<std::mutex> lock(processorMutex);
@@ -91,14 +89,23 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
     // Construct after all resources so every exit drains before releasing them.
     Drain drain{ context };
     Require(simulator.AllocateSyntheticResources(request.width, request.height));
-    NVNGX_InitializationParams init{ request.width, request.height, request.width, request.height, request.preset };
-    if (!backend.Initialize(runtime.c_str(), context.GetDevice(), &init))
-        throw std::runtime_error(Utf8(backend.GetLastError()));
+    SimulatorConfig config;
+    config.validationOnly = !kNeuralInferenceAvailable;
+    if (kNeuralInferenceAvailable) {
+        const auto runtime = RuntimePath();
+        if (!std::filesystem::is_regular_file(runtime))
+            throw std::runtime_error("nvngx_dlssnr.dll is missing beside the native module.");
+        NVNGX_InitializationParams init{ request.width, request.height, request.width, request.height, request.preset };
+        if (!backend.Initialize(runtime.c_str(), context.GetDevice(), &init))
+            throw std::runtime_error(Utf8(backend.GetLastError()));
+    } else {
+        OutputDebugStringA("[Gaslightr] D3D12 validation copy; neural DLL is not loaded.\n");
+    }
     Begin(context);
     Require(memory.UploadToGPU(tile, rgba.data(), request.width * 4 * sizeof(float), SourcePixelFormat::RGBA_32F, context.GetCommandList()));
     Submit(context);
     ID3D12Resource* output = nullptr;
-    Require(simulator.ExecuteFullPipeline(tile.gpuTexture.Get(), &output, SimulatorConfig{}));
+    Require(simulator.ExecuteFullPipeline(tile.gpuTexture.Get(), &output, config));
     // Simulator guarantees shader-readable output; MemoryBridge performs the
     // shader-resource -> copy-source transition and restores it after copying.
     tile.gpuTexture = output;
@@ -115,7 +122,7 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
         for (uint32_t x = 0; x < request.width * 4; ++x) {
             const size_t i = static_cast<size_t>(y) * request.width * 4 + x;
             result[i] = (x % 4 == 3) ? rgba[i] : DecodeHalf(row[x]);
-            if (!std::isfinite(result[i])) throw std::runtime_error("The neural runtime returned non-finite pixels.");
+            if (!std::isfinite(result[i])) throw std::runtime_error("The GPU pipeline returned non-finite pixels.");
         }
     }
     Require(context.WaitForGPU());

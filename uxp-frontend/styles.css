@@ -1,13 +1,47 @@
-body { padding: 16px; color: var(--uxp-host-text-color); background: var(--uxp-host-background-color); }
-main { display: flex; flex-direction: column; }
-h2 { margin: 0 0 4px; }
-label, .control { margin-top: 16px; }
-.control-row, .actions { display: flex; align-items: center; }
-.control-row sp-slider { flex: 1; margin-right: 12px; }
-.control-row input { width: 64px; }
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+  height: 100%; margin: 0; padding: 12px;
+  display: flex; flex-direction: column; align-items: stretch;
+  overflow: hidden;
+  color: var(--uxp-host-text-color);
+  background: var(--uxp-host-background-color);
+}
+.panel-header {
+  display: flex; flex-direction: column; align-items: stretch;
+  flex: 0 0 auto; width: 100%; min-width: 0;
+}
+.panel-header > * { flex-shrink: 0; width: 100%; min-width: 0; }
+h2 { display: block; margin: 0 0 6px; }
+sp-body { display: block; white-space: normal; }
+#backendStatus { margin: 0 0 10px; }
+#nativeCheck { width: 100%; margin: 0; }
+.response-label { display: block; margin: 10px 0 4px; }
+#status {
+  display: block; width: 100%; height: 104px; min-height: 104px;
+  margin: 0; padding: 8px; font-size: 12px;
+  white-space: pre-wrap; overflow: auto;
+}
+.panel-content {
+  display: flex; flex-direction: column; align-items: stretch;
+  flex: 1 1 0px; min-height: 0; min-width: 0; width: 100%;
+  overflow-y: auto; overflow-x: hidden;
+  margin-top: 12px; padding-right: 6px;
+}
+.panel-content > * { flex-shrink: 0; min-width: 0; width: 100%; }
+#enhancementSettings { display: flex; flex-direction: column; align-items: stretch; }
+#enhancementSettings > * { flex-shrink: 0; width: 100%; }
+label, .control { display: block; margin-top: 12px; }
+.control-row { display: flex; flex-direction: row; align-items: center; width: 100%; }
+.control-row sp-slider { flex: 1; min-width: 0; margin-right: 8px; }
+.control-row input { flex: 0 0 64px; width: 64px; }
 select { width: 100%; margin-top: 6px; }
-sp-checkbox { margin-top: 18px; }
-canvas { width: 100%; height: 240px; background: #202124; margin-top: 16px; }
-.actions { flex-wrap: wrap; margin-top: 14px; }
-.actions sp-button { margin: 0 6px 6px 0; }
-#status { margin-top: 10px; }
+sp-checkbox { margin-top: 14px; }
+#preview { display: block; width: 100%; height: 180px; background: #202124; margin: 0 0 8px; }
+#precisionNote { margin-top: 8px; }
+.actions {
+  display: flex; flex-direction: column; align-items: stretch;
+  flex: 0 0 auto; width: 100%; margin-top: 10px;
+}
+.actions sp-button { flex-shrink: 0; width: 100%; margin: 0 0 6px; }
+.actions sp-button:last-child { margin-bottom: 0; }

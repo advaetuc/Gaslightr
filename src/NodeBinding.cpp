@@ -2,6 +2,7 @@
 // UXP must use Adobe's addon API adapter once its SDK is installed.
 #include <node_api.h>
 #include "TileProcessor.h"
+#include "BackendCapabilities.h"
 #include <cstring>
 #include <string>
 
@@ -69,6 +70,12 @@ napi_value Capabilities(napi_env env, napi_callback_info) {
         Check(napi_get_boolean(env, false, &value));
         Check(napi_set_named_property(env, result, "detailOnly", value));
         Check(napi_set_named_property(env, result, "sdkMessaging", value));
+        Check(napi_get_boolean(env, Gaslightr::kNeuralInferenceAvailable, &value));
+        Check(napi_set_named_property(env, result, "neuralInference", value));
+        Check(napi_create_string_utf8(env, Gaslightr::kNeuralInferenceReason, NAPI_AUTO_LENGTH, &value));
+        Check(napi_set_named_property(env, result, "neuralInferenceReason", value));
+        Check(napi_create_string_utf8(env, Gaslightr::kExecutionMode, NAPI_AUTO_LENGTH, &value));
+        Check(napi_set_named_property(env, result, "executionMode", value));
         Check(napi_create_string_utf8(env, "CUDA texture interop requires repair and device validation.", NAPI_AUTO_LENGTH, &value));
         Check(napi_set_named_property(env, result, "detailOnlyReason", value));
         return result;
