@@ -2,9 +2,9 @@
 
 Experimental Windows x64 Photoshop enhancement project using a headless D3D12 temporal pipeline.
 
-The UXP frontend, bounded Imaging API orchestration, C++ tile processor, and diagnostic Node-API binding are implemented. **This is not yet an installable, end-to-end Photoshop plugin.** Adobe SDK integration, native addon packaging, and the inferred neural-runtime ABI still require validation. Detail-Only mode is disabled pending CUDA interop repair.
+The UXP frontend, bounded Imaging API orchestration, C++ tile processor, diagnostic Node-API binding, and real Adobe UXP addon are implemented. The `.uxpaddon` builds against the locally installed Adobe SDK and is staged with matching debugging symbols. **Photoshop loading and end-to-end inference remain unverified.** The inferred neural-runtime ABI still requires validation. Detail-Only mode is disabled pending CUDA interop repair.
 
-Start with [SDK setup and remaining integration work](docs/SDK_SETUP.md). See [implementation status and contracts](docs/IMPLEMENTATION_STATUS.md) for exact coverage and limitations.
+Start with the [complete offline UXP setup and implementation guide](docs/OFFLINE_UXP_IMPLEMENTATION_GUIDE.md), including full source, SDK staging, build commands, directory-junction checks, file-log monitoring and Visual Studio native debugging. See [implementation status and contracts](docs/IMPLEMENTATION_STATUS.md) for exact coverage and limitations.
 
 From a Visual Studio 2022 Developer PowerShell:
 

@@ -79,6 +79,7 @@ function createBridge(ps, loadNative) {
     isBusy: () => busy,
     cancel: () => { cancelled = true; },
     capabilities: () => native().capabilities(),
+    checkNative: () => modal("Gaslightr native diagnostics", () => require("./native-checks.js").checkNativeBoundary(native())),
     sendSDKMessage: (command, payload) => modal("Gaslightr native message", () => sendInModal(command, payload)),
     preview: value => modal("Gaslightr preview", async context => {
       const config = pixels.settings(value), api = native(), caps = validateCapabilities(api, config), src = source();

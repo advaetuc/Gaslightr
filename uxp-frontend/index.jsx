@@ -10,7 +10,11 @@ const bridge = createBridge(require("photoshop"), () => {
 const state = { intensity: 0.5, structure: 0, feather: 0, style: "default", preset: 0, detailOnly: false };
 const element = id => document.getElementById(id);
 let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false, dragging = false;
-const status = message => { element("status").textContent = message; };
+const status = message => {
+  element("status").textContent = message;
+  console.log(`[Gaslightr] ${new Date().toISOString()} ${message}`);
+};
+console.log("[Gaslightr] panel script loaded");
 for (const [key, label, max, step] of [["intensity", "NR Intensity", 1, 0.01], ["structure", "Local Tone / Structure", 1, 0.01], ["feather", "Mask Feathering · layer edges (px)", 32, 1]]) {
   const control = document.createElement("div"); control.className = "control";
   const caption = document.createElement("label"); caption.textContent = label;
@@ -67,6 +71,13 @@ async function run(apply) {
   }
 }
 element("refresh").addEventListener("click", () => run(false));
+element("nativeCheck").addEventListener("click", async () => {
+  if (bridge.isBusy()) return;
+  element("nativeCheck").disabled = true;
+  try { status(await bridge.checkNative()); }
+  catch (error) { status(error.message || String(error)); }
+  finally { element("nativeCheck").disabled = false; }
+});
 element("apply").addEventListener("click", () => run(true));
 element("cancel").addEventListener("click", () => { pendingPreview = false; clearTimeout(timer); ++revision; bridge.cancel(); status("Cancelling after the current tile…"); });
 const canvas = element("preview");
@@ -76,6 +87,7 @@ canvas.addEventListener("mousemove", event => { if (dragging) compare(event); })
 document.addEventListener("mouseup", () => { dragging = false; });
 try {
   const caps = bridge.capabilities();
+  console.log(`[Gaslightr] native capabilities ${JSON.stringify(caps)}`);
   element("detailOnly").disabled = !caps.detailOnly;
   element("detailStatus").textContent = caps.detailOnly ? "" : caps.detailOnlyReason;
 } catch (error) {

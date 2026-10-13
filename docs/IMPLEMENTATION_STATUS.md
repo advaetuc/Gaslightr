@@ -1,6 +1,6 @@
 # Implementation status — 12 October 2026
 
-This update follows the user's revised scope: complete the work possible without Adobe SDKs and document the remaining setup. None of the tests establish successful DLSS 5 inference or Photoshop host integration.
+The Adobe SDKs are now installed in `C:\SDKs\Adobe\Photoshop` and `C:\SDKs\Adobe\UXP-Hybrid`. A real Adobe UXP adapter has been compiled and staged; the [offline implementation guide](OFFLINE_UXP_IMPLEMENTATION_GUIDE.md) supersedes the earlier SDK installation instructions. None of the tests establish successful DLSS 5 inference or Photoshop host integration.
 
 ## Implemented and checked
 
@@ -11,6 +11,8 @@ This update follows the user's revised scope: complete the work possible without
 | Tiling | At most 1024×1024 input tiles, 32-pixel halos, non-overlapping 960×960 cores, clipped edge tiles, negative layer coordinates, bounded per-tile ownership |
 | `TileProcessor` | Linear RGBA32F validation, GPU-budget preflight, existing `MemoryBridge`/`PipelineSimulator` orchestration, float16 readback conversion, original alpha retention, serialized NGX access |
 | `NodeBinding` | Real `napi_get_typedarray_info` buffer borrow, byte-offset handling, native exceptions translated to JS errors, compiled Windows x64 `.node` diagnostic module |
+| `UxpAddonAdapter` | Actual Adobe API registration, intrinsic Float32Array metadata validation, synchronous ArrayBuffer borrowing, `TileProcessor` execution, checked core fences, JS exceptions and owned output buffers; compiled x64 `.uxpaddon` with matching PDB |
+| Offline bring-up | SDK staging script, CMake target with `/Y-` on all Adobe helpers, manifest 6 as required by this SDK, in-panel native boundary checks, directory-junction verification and native-debugger SOP |
 | Existing graphics core | Fixed MSVC SEH/unwinding compile error, UAV-capable output textures and transitions, checked reset/close/fence results, device-removal reporting |
 | `PhotoshopMessaging` | SDK-dependent `AutoPluginMain`, suite acquisition/release, listener lifecycle and bounded configuration-envelope receipts; **not compiled or host-tested** |
 
@@ -24,12 +26,12 @@ The native call borrows the JS view synchronously, preventing the calling isolat
 
 NR Intensity blends enhanced and original pixels. Default, Natural, and Cinematic use blend multipliers 1, 0.65, and 1.25 respectively. Local Tone / Structure adds a luminance high-pass signal from a 7×7 box filter. Mask Feathering applies a smoothstep enhancement mask inward from the source layer's rectangular edges, in pixels; it does not feather Photoshop's selection or an existing layer mask. These are explicitly defined post-inference controls, not claimed fields in the undocumented NGX ABI. Preset is passed to the existing initialization struct as 0/1/2.
 
-The 32-pixel halo covers the local postprocessing filter. It does **not** prove seam-free neural inference: the model's receptive field and independent tile histories still need image-based evaluation. Preview uses a 512-pixel full-resolution center crop, not the current Photoshop viewport. Processing is debounced; real-time latency has not been measured. The synchronous diagnostic native call cannot be interrupted mid-tile.
+The 32-pixel halo covers the local postprocessing filter. It does **not** prove seam-free neural inference: the model's receptive field and independent tile histories still need image-based evaluation. Preview uses a 512-pixel full-resolution center crop, not the current Photoshop viewport. Processing is debounced; real-time latency has not been measured. The synchronous native call cannot be interrupted mid-tile.
 
 ## Remaining work and blockers
 
-1. **Adobe UXP adapter:** implement against the installed `UxpAddon.h` / `UxpAddonShared.h` SDK and its actual ABI. Register `processTile` and `capabilities` using Adobe's macros and handle lifetime rules. The Node binding is a tested diagnostic implementation, not this adapter.
-2. **Photoshop C++ packaging:** compile `PhotoshopMessaging.cpp` with the actual headers; build the automation sample's PiPL/resource target with component ID `com.advaet.gaslightr.native`. The current CMake option only builds an object file. The listener acknowledges delivery; it does not perform inference or write pixels.
+1. **Adobe UXP host validation:** the adapter now builds against the installed SDK 0.1.0 and exports `uxp_addon_init` / `uxp_addon_terminate`. Validate discovery, addon loading, the six in-panel boundary checks and typed-array intrinsics inside Photoshop. The existing junction points at the frontend, but host registration has not been established. The requested `photoshop.log` was absent during inspection. The Node binding remains a separate diagnostic module.
+2. **Optional Photoshop C++ companion:** compile `PhotoshopMessaging.cpp` with the actual headers and package the automation sample's PiPL/resource target only if a separate SDK companion is needed. The current CMake option only builds an object file. The listener acknowledges delivery; it does not perform inference or write pixels. The new direct addon reports `sdkMessaging: false` and does not require this companion.
 3. **C++ pixel suites:** the references supply no declarations or usable sample for `PSImageTileSuite`. Its availability/signature and a supported C++ layer-write path must be established from the installed SDK. `PSBufferSuite` allocation alone is not an implemented layer-write path here. Current extraction/writeback uses Adobe's documented UXP Imaging API. No invented suite structs were added.
 4. **CUDA detail mode:** existing `CUDAInterop.cu` is retained but not built or called. It attempts an `IDXGIResource1` path for D3D12 resources, maps tiled textures as linear CUDA buffers, and its single-channel luminance does not match the simulator's RGBA output contract. It also takes the address of a temporary resource description. Repair resource sharing, array/surface mapping, adapter matching, synchronization, alpha handling, and luminance format conversion before enabling the capability.
 5. **NGX ABI and teardown:** the supplied blueprint itself labels its structs as inferred. Their compatibility with an actual `nvngx_dlssnr.dll` has not been established. The existing backend unloads the module but has no verified feature-destruction/shutdown entry point. Repeated tile initialization must be tested for leaks after the real runtime contract is obtained. SEH catches some faults but cannot guarantee host-process safety after arbitrary ABI mismatch.

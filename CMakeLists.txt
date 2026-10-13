@@ -19,6 +19,7 @@ add_library(GaslightrCore STATIC src/DX12Context.cpp src/NeuralBackend.cpp
     src/MemoryBridge.cpp src/PipelineSimulator.cpp src/TileProcessor.cpp)
 gaslightr_compile(GaslightrCore)
 target_link_libraries(GaslightrCore PUBLIC d3d12 dxgi dxguid Advapi32)
+include(cmake/UxpAddon.cmake)
 option(GASLIGHTR_BUILD_HARNESS "Build the original registry-writing diagnostic executable" OFF)
 if(GASLIGHTR_BUILD_HARNESS)
     add_executable(Gaslightr src/main.cpp)
