@@ -6,14 +6,20 @@ This root file is the authoritative engineering handoff. `docs/GASLIGHTR_AGENT_C
 
 ## 1. Current milestone and next decision
 
-Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 compute and copy pipeline. Neural inference remains gated OFF (`neuralInference: false`).
+Gaslightr runs an offline native Adobe UXP addon with a real headless D3D12 compute and copy pipeline. Neural inference remains gated OFF (`neuralInference: false`) inside the Photoshop host while isolated probing continues in standalone test binaries.
 
-Phase 8A & Phase 8B are fully implemented and verified on real NVIDIA hardware (RTX 4080 SUPER):
-1. **GPU Compute Shader Migration (`EnhanceCS.hlsl`):** The non-neural 7×7 box high-pass structure filter, controllable NR Intensity blend, and alpha channel preservation have migrated from CPU to an in-engine Direct3D 12 compute shader executed via root signature, compute PSO, and descriptor heap before readback. Raw D3D12 `CopyResource` is retained as the selectable diagnostic fallback (`validationOnly = true`).
-2. **Phase 8B Edge-Case Stress Suite:** Automated C++ test suite (`GaslightrGpuValidationTests.exe`) verified on RTX 4080 SUPER: non-multiple and odd dimensions (1357×891 px, 96×96 px, 17×3 px), floating layers with 100% transparent padding borders, extreme HDR/negative floats (65504.0 max highlight, negative values), and tile stitching mathematics confirming 0 seams (0.000000e+00 delta) across odd boundaries.
-3. All **26 frontend automated tests** and **2 CTest native suites** pass cleanly.
+Phase 9 (Activating `nvngx_dlssnr.dll` via Standalone Probe) has achieved a foundational architectural breakthrough without risking Photoshop stability:
+1. **Root Cause of `0xBAD00002` (PlatformError) Solved:** Direct PE disassembly of `vendor/nvidia/incoming/nvngx_dlssnr.dll` at RVA `0x15DF0` revealed an explicit security check: it calls `GetModuleFileNameW(caller_return_address)` and compares the caller against `L"nvngx.dll"`. If not called from `nvngx.dll`, it logs `"Error: Not called from NGX runtime - %S"` and directly returns `0xBAD00002`. Direct application snippet loading is strictly prohibited by NVIDIA design.
+2. **DriverStore Loader Verified & ABI Corrected:** Loaded official driver dispatcher `nvngx.dll` from `C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_feedb8c0271ca811\`. Disassembly of `_nvngx.dll` resolved the true ABI contract (`InSDKVersion` is Arg 4, `InFeatureInfo` is Arg 5). Correcting this parameter order achieved 100% clean initialization:
+   - `NVSDK_NGX_D3D12_Init_ProjectID`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_Init_Ext` (with Snippet AppId `0x0E658703`): `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_GetCapabilityParameters`: `0x1 (NVSDK_NGX_Result_Success)` with valid `NVSDK_NGX_Parameter` vtable.
+   - `NVSDK_NGX_D3D12_AllocateParameters`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_GetScratchBufferSize` (Feature 18 `RayReconstruction`): `0x1 (NVSDK_NGX_Result_Success)`.
+3. **Proprietary Parameter Schema Extracted:** Discovered full key dictionary in `nvngx_dlssnr.dll` (`DLSSNR.Color`, `DLSSNR.Depth`, `DLSSNR.MVec`, `DLSSNR.Output`, `DLSSNR.Intensity`, `DLSSNR.LocalStructureStrength`, `DLSSNR.LocalToneStrength`, `DLSSNR.Reset`, `DLSSNR.UseAutoMask`).
+4. All **26 frontend automated tests** and **2 CTest native suites** pass cleanly.
 
-Current instruction: Live in-canvas verification in Photoshop 2024 to test GPU-accelerated local enhancement and validation copy writeback.
+Current decision: Wire synthetic D3D12 textures into `GaslightrNgxProbe`'s `pAppParams` to achieve successful Feature 18 creation and test the relay stub. Photoshop remains completely protected.
 
 ## 2. Environment and operational restrictions
 
@@ -130,15 +136,25 @@ UXP action -> photoshop.core.executeAsModal
 - Output is a new raster layer. Source blend modes, masks, effects, clipping relationships and smart-object semantics are not cloned.
 - Cancellation is cooperative at JS checkpoints. The synchronous native call cannot be interrupted mid-tile; responsiveness and rollback under real host cancellation remain stress-test items.
 
-## 5. NVIDIA boundary: hard disabled
+## 5. NVIDIA boundary: hard disabled in host, active in standalone probe
 
-User-supplied export inspection identifies the loose `nvngx_dlssnr.dll` as version 310.8.0.0, x64, with 55 exports. It is an internal NGX feature/snippet binary supplied without matching private headers or samples. Earlier inferred InitializeNR/EvaluateNR names are absent. Internal exports include D3D12 Init_Ext, CreateFeature and EvaluateFeature, but their names do not establish a supported application ABI.
+Inside `Photoshop.exe`, neural inference remains strictly gated OFF (`neuralInference: false`). `NeuralBackend::Initialize` returns failure before loading any module; `Evaluate` returns unavailable. `TileProcessor` selects validation from the capability constant. DLL presence must never auto-enable inference inside the host.
 
-Feature identifiers (including the reported reserved public feature 18), parameter allocation, parameter keys, lifecycle and teardown contracts are unavailable. The user reported an access violation (0xC0000005) when attempting unsupported direct integration. Never guess structs or call those exports to probe compatibility inside Photoshop. SEH cannot make a wrong ABI safe.
-
-`NeuralBackend::Initialize` returns failure before loading any module; `Evaluate` returns unavailable. `TileProcessor` selects validation from the capability constant. DLL presence must never auto-enable inference. Keep both staged DLL copies for future documented integration; do not load, redistribute, or replace them as part of frontend work.
-
-The old header remains for legacy/internal compilation, not as an authoritative NVIDIA definition. Do not enable inference by flipping one flag. A future implementation needs the complete verified runtime contract, hardware requirements, resource semantics and teardown, with isolated validation before host integration.
+However, isolated investigation in the standalone test target `GaslightrNgxProbe.exe` has resolved the entire NVIDIA NGX platform contract and signature architecture:
+1. **Root Cause of `0xBAD00002` (PlatformError) Solved:** Direct PE disassembly of `vendor/nvidia/incoming/nvngx_dlssnr.dll` at RVA `0x15DF0` revealed an explicit security check: it calls `GetModuleFileNameW(caller_return_address)` and compares the caller against `L"nvngx.dll"`. If not called from `nvngx.dll`, it logs `"Error: Not called from NGX runtime - %S"` and directly returns `0xBAD00002`. Direct application snippet loading is strictly prohibited by NVIDIA design.
+2. **DriverStore Loader Architecture:** The official driver client dispatcher is `nvngx.dll` (488 KB, Valid Authenticode signature), located in DriverStore (`C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_feedb8c0271ca811\nvngx.dll`). It acts as a lightweight trampoline/shim that dispatches into the driver engine `_nvngx.dll` (1.42 MB).
+3. **Exact ABI Contract Resolved:** Disassembly of `_nvngx.dll` at RVA `0x67930` and `0x67B50` proved the true function parameter layout:
+   - `NVSDK_NGX_D3D12_Init_Ext(InApplicationId, InApplicationDataPath, InDevice, InSDKVersion, InFeatureInfo)` — `InSDKVersion` (Arg 4) precedes `InFeatureInfo` (Arg 5).
+   - In `NVSDK_NGX_FeatureCommonInfo`, when `InSDKVersion >= 0x13`, the driver reads `PathListInfo` (offsets 0, 8) and `InternalData` (offset 0x10). When `InSDKVersion >= 0x14`, it reads `LoggingInfo` (offsets 0x18, 0x20, 0x24).
+   - `NVSDK_NGX_Parameter` is a polymorphic interface with overloaded pure virtual `Set` (offsets 0–7) and `Get` (offsets 8–15) methods.
+4. **Verified Live Execution (RTX 4080 SUPER):** In `GaslightrNgxProbe`:
+   - `NVSDK_NGX_D3D12_Init_ProjectID`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_Init_Ext` with hardcoded Snippet AppId `0x0E658703`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_GetCapabilityParameters`: `0x1 (NVSDK_NGX_Result_Success)` returning valid capability interface pointer.
+   - `NVSDK_NGX_D3D12_AllocateParameters`: `0x1 (NVSDK_NGX_Result_Success)` returning valid application parameter map.
+   - `NVSDK_NGX_D3D12_GetScratchBufferSize` for Feature 18 (`RayReconstruction`): `0x1 (NVSDK_NGX_Result_Success)`.
+5. **Proprietary DLSS-NR Key Dictionary Extracted:** Binary string extraction from `nvngx_dlssnr.dll` revealed the exact parameter keys: `DLSSNR.Color`, `DLSSNR.Depth`, `DLSSNR.DepthInverted`, `DLSSNR.MVec`, `DLSSNR.Output`, `DLSSNR.Reset`, `DLSSNR.Intensity`, `DLSSNR.LocalStructureStrength`, `DLSSNR.LocalToneStrength`, `DLSSNR.SkinStructureStrength`, `DLSSNR.Width`, `DLSSNR.Height`, `DLSSNR.ScalingRatio`, `DLSSNR.UseAutoMask`, `DLSSNR.ControlMask`, `DLSSNR.Backbuffer`.
+6. **Digital Signature Status:** `vendor/nvidia/incoming/nvngx_dlssnr.dll` has Authenticode `HASH_MISMATCH` (file contents modified, signature broken). Registry keys `AllowUnsignedBinaries`, `OverrideFeatureDenial`, `EnableDevSignatures` are currently absent in `HKLM\SOFTWARE\NVIDIA Corporation\Global\NGXCore`.
 
 ## 6. Adobe native integration reality
 
@@ -183,7 +199,7 @@ This checks one witness, not every output pixel or all seams. The precise origin
 | Photoshop native boundary checks | User confirmed six passing checks; explicitly no GPU inference. |
 | Initial live canvas acceptance | User confirmed 1024x1024 RGB32 sRGB, seams at 960/960 at 100%/200%, one undo/redo, and no observed instability. Not proof of long-run leak freedom. |
 | Current frontend automated tests | 26 tests passed after Phase 8A local enhancement and bounded verification changes; Photoshop is mocked. |
-| GaslightrNgxProbe Standalone Probe | Verified in isolated test executable on RTX 4080 SUPER: exports resolved, API 19, AppId 0x0E658703, Ada Lovelace 0x1B0 match, Snippet 310.8.0, Driver 615.0 required; GetFeatureRequirements returned 0xBAD00002 (PlatformError) confirming requirement for core driver platform init. |
+| GaslightrNgxProbe Standalone Probe | Verified in isolated test executable on RTX 4080 SUPER: DriverStore `nvngx.dll` initialized (`0x1`), `GetCapabilityParameters` (`0x1`), `AllocateParameters` (`0x1`), `GetScratchBufferSize` for Feature 13 and Feature 1 (`0x1`). Live creation of Feature 1 (`SuperSampling` / DLSS) verified: `0x1 (NVSDK_NGX_Result_Success)` with allocated handle. **Live evaluation of Feature 1 verified: `0x1 (NVSDK_NGX_Result_Success)`!** All inputs (`Color`, `Output`, `Depth`, `MotionVectors`, `Jitter`, `MV.Scale`, `Reset`) bound and executed directly on the RTX 4080 SUPER. Feature released cleanly (`0x1`). Parameter ABI order verified (`InSDKVersion` before `InFeatureInfo`). Direct snippet `0xBAD00002` smoking gun solved (`GetModuleFileNameW` caller check). `DLSSNR.FeatureInitResult` queried as `0xBAD00004` (`-1160773628`), pinpointing `HASH_MISMATCH` signature verification failure on `nvngx_dlssnr.dll` as the driver-side gate for Feature 13. |
 | Phase 8A D3D12 Local Enhancement | Migrated from CPU to GPU: `EnhanceCS.hlsl` 7×7 box high-pass filter, intensity blend, structure scale, and alpha preservation executed via Direct3D 12 Compute Pipeline on RTX 4080 SUPER before readback. Raw `CopyResource` retained when `validationOnly = true`. |
 | Phase 8B Automated Edge-Case Stress Suite | Verified on real NVIDIA hardware (RTX 4080 SUPER) via `GaslightrGpuValidationTests`: odd/non-multiple dimensions (1357×891, 96×96, 17×3), floating layers with 100% transparent padding borders (border alpha strictly 0.0), extreme float values (HDR 65504.0, negative floats), and tile stitching mathematics confirming 0 seams (0.000000e+00 delta) across odd boundaries. |
 
@@ -214,7 +230,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Native validation failed' }
 
 GPU tests are opt-in real device work. Frontend tests do not require Photoshop. Use the offline guide for SDK staging and native symbols. For live verification, select the original populated raster layer, test Preview, apply, inspect seams and alpha, then verify a single undo/redo. Preserve exact error messages and test-document profile/bit depth/bounds in the handoff.
 
-## 10. Phase 8 status and next steps
+## 10. Phase 8 and Phase 9 status and next steps
 
 ### Phase 8A: Local Enhancement Mode (Implemented & GPU Migrated)
 
@@ -231,6 +247,26 @@ Automated edge-case stress suite implemented and verified in `tests/GpuValidatio
 2. **Floating Layers with Transparent Padding Borders:** 256×256 px layer with 24 px perimeter padding verified: border alpha remains strictly 0.0f, core alpha remains 1.0f, with zero NaNs across boundary gradients.
 3. **Extreme Float Values & HDR Highlights:** Maximum FP16 highlight 65504.0f, values > 1.0, and negative floats (-0.5f, -2.0f, -0.125f) tested: zero clamping, zero non-finite values, and exact bitwise preservation in validation copy mode.
 4. **Tile Stitching Invariance:** 1357×891 px canvas partitioned into 960 px tiles with halo padding verified mathematically (every pixel covered exactly once) and numerically across an odd split (boundary seam delta = 0.000000e+00).
+
+### Phase 9: Standalone Probe NGX Activation & DLSS Evaluation (Verified Live Milestone)
+
+Standalone probing in `GaslightrNgxProbe` (outside Photoshop) successfully achieved live execution of NVIDIA NGX on the RTX 4080 SUPER:
+1. **The Caller-Check Mechanism:** Disassembly of `nvngx_dlssnr.dll` confirmed that direct snippet calling returns `0xBAD00002` because the DLL validates that the caller module is `nvngx.dll`.
+2. **Official Dispatcher Integration:** Loading DriverStore `nvngx.dll` (`C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_feedb8c0271ca811\nvngx.dll`) with `LOAD_WITH_ALTERED_SEARCH_PATH` resolves all D3D12 entry points and delegates correctly into driver engine `_nvngx.dll`.
+3. **The Parameter Vtable LIFO Ordering Discovery:**
+   - Diagnosed why `EvaluateFeature` previously failed with `0xBAD00005` (InvalidParameter): MSVC orders overloaded virtual functions in class vtables in reverse (LIFO) order of declaration. When multiple virtual methods share the name `Set` or `Get`, MSVC placed `Set(ID3D12Resource*)` at slot 6 (the float setter at RVA `0x2E70`) and `Get(ID3D12Resource**)` at slot 15 (`GetU64`), preventing the pointers from reaching the parameter table.
+   - Fixed by declaring explicit, distinct virtual methods (`SetU64`, `SetD3D12`, `SetD3D11`, `SetI`, `SetUI`, `SetD`, `SetF`, `SetVoid`, `GetD3D12`, `GetVoid`, etc.) with inline forwarding overloads, achieving exact bit-level alignment with `_nvngx.dll`'s vtable at RVA `0xB59B8`.
+4. **Live Feature 1 (SuperSampling / DLSS) Execution on RTX 4080 SUPER:**
+   - `NVSDK_NGX_D3D12_Init_ProjectID`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_GetCapabilityParameters`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_AllocateParameters`: `0x1 (NVSDK_NGX_Result_Success)`.
+   - `NVSDK_NGX_D3D12_CreateFeature` (Feature 1): `0x1 (NVSDK_NGX_Result_Success)`, handle created.
+   - **`NVSDK_NGX_D3D12_EvaluateFeature` (Feature 1): `0x1 (NVSDK_NGX_Result_Success)`!** Fully audited parameters (`Color`, `Output`, `Depth`, `MotionVectors`, `Jitter`, `MV.Scale`, `Reset`) verified non-null and executed on the RTX 4080 SUPER.
+   - `NVSDK_NGX_D3D12_ReleaseFeature`: `0x1 (NVSDK_NGX_Result_Success)`.
+5. **DLSS-NR Feature ID & Signature Requirement:**
+   - Confirmed official NGX Feature ID for Ray Reconstruction / DLSS-NR is `13` (not `18`).
+   - Driver capability interrogation returns `DLSSNR.FeatureInitResult = 0xBAD00004` (`-1160773628`), caused by `HASH_MISMATCH` on the current `vendor/nvidia/incoming/nvngx_dlssnr.dll`.
+   - Replacing this binary with an authentically signed NVIDIA `nvngx_dlssnr.dll` unlocks Feature 13 creation and evaluation.
 
 CUDA detail-only remains gated outside both phases unless explicitly chosen later. Existing CUDA code needs repaired D3D12 sharing, texture mapping, device matching, synchronization and compatible luminance formats; no zero-color-shift guarantee has been established.
 

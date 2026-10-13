@@ -1,0 +1,99 @@
+Microsoft (R) COFF/PE Dumper Version 14.44.35228.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file scratch\temp410.obj
+
+File Type: COFF OBJECT
+
+  0000000000000000: 89 85 B8 01 00 00  mov         dword ptr [rbp+00000000000001B8h],eax
+  0000000000000006: 48 C7 85 C8 01 00  mov         qword ptr [rbp+00000000000001C8h],15h
+                    00 15 00 00 00
+  0000000000000011: 48 C7 85 D0 01 00  mov         qword ptr [rbp+00000000000001D0h],1Fh
+                    00 1F 00 00 00
+  000000000000001C: 0F 10 05 F5 A5 07  movups      xmm0,xmmword ptr [000000000007A618h]
+                    00
+  0000000000000023: 0F 11 00           movups      xmmword ptr [rax],xmm0
+  0000000000000026: 8B 0D FC A5 07 00  mov         ecx,dword ptr [000000000007A628h]
+  000000000000002C: 89 48 10           mov         dword ptr [rax+10h],ecx
+  000000000000002F: 0F B6 0D F6 A5 07  movzx       ecx,byte ptr [000000000007A62Ch]
+                    00
+  0000000000000036: 88 48 14           mov         byte ptr [rax+14h],cl
+  0000000000000039: C6 40 15 00        mov         byte ptr [rax+15h],0
+  000000000000003D: C7 85 D8 01 00 00  mov         dword ptr [rbp+00000000000001D8h],11h
+                    11 00 00 00
+  0000000000000047: 48 8D 8D E0 01 00  lea         rcx,[rbp+00000000000001E0h]
+                    00
+  000000000000004E: 0F 57 C0           xorps       xmm0,xmm0
+  0000000000000051: 0F 11 85 E0 01 00  movups      xmmword ptr [rbp+00000000000001E0h],xmm0
+                    00
+  0000000000000058: 66 0F 6F 0D D0 F8  movdqa      xmm1,xmmword ptr [000000000007F930h]
+                    07 00
+  0000000000000060: 66 0F 7F 8D F0 01  movdqa      xmmword ptr [rbp+00000000000001F0h],xmm1
+                    00 00
+  0000000000000068: BA 20 00 00 00     mov         edx,20h
+  000000000000006D: E8 5E 84 FC FF     call        FFFFFFFFFFFC84D0
+  0000000000000072: 48 89 85 E0 01 00  mov         qword ptr [rbp+00000000000001E0h],rax
+                    00
+  0000000000000079: 66 0F 6F 05 FF F8  movdqa      xmm0,xmmword ptr [000000000007F980h]
+                    07 00
+  0000000000000081: 66 0F 7F 85 F0 01  movdqa      xmmword ptr [rbp+00000000000001F0h],xmm0
+                    00 00
+  0000000000000089: 0F 10 0D A0 A5 07  movups      xmm1,xmmword ptr [000000000007A630h]
+                    00
+  0000000000000090: 0F 11 08           movups      xmmword ptr [rax],xmm1
+  0000000000000093: 8B 0D A7 A5 07 00  mov         ecx,dword ptr [000000000007A640h]
+  0000000000000099: 89 48 10           mov         dword ptr [rax+10h],ecx
+  000000000000009C: 0F B6 0D A1 A5 07  movzx       ecx,byte ptr [000000000007A644h]
+                    00
+  00000000000000A3: 88 48 14           mov         byte ptr [rax+14h],cl
+  00000000000000A6: C6 40 15 00        mov         byte ptr [rax+15h],0
+  00000000000000AA: C7 85 00 02 00 00  mov         dword ptr [rbp+0000000000000200h],12h
+                    12 00 00 00
+  00000000000000B4: 48 8D 8D 08 02 00  lea         rcx,[rbp+0000000000000208h]
+                    00
+  00000000000000BB: 0F 57 C0           xorps       xmm0,xmm0
+  00000000000000BE: 0F 11 85 08 02 00  movups      xmmword ptr [rbp+0000000000000208h],xmm0
+                    00
+  00000000000000C5: 48 89 BD 18 02 00  mov         qword ptr [rbp+0000000000000218h],rdi
+                    00
+  00000000000000CC: 48 C7 85 20 02 00  mov         qword ptr [rbp+0000000000000220h],0Fh
+                    00 0F 00 00 00
+  00000000000000D7: BA 20 00 00 00     mov         edx,20h
+  00000000000000DC: E8 EF 83 FC FF     call        FFFFFFFFFFFC84D0
+  00000000000000E1: 48 89 85 08 02 00  mov         qword ptr [rbp+0000000000000208h],rax
+                    00
+  00000000000000E8: 48 C7 85 18 02 00  mov         qword ptr [rbp+0000000000000218h],18h
+                    00 18 00 00 00
+  00000000000000F3: 48 C7 85 20 02 00  mov         qword ptr [rbp+0000000000000220h],1Fh
+                    00 1F 00 00 00
+  00000000000000FE: 0F 10 05 43 A5 07  movups      xmm0,xmmword ptr [000000000007A648h]
+                    00
+  0000000000000105: 0F 11 00           movups      xmmword ptr [rax],xmm0
+  0000000000000108: F2 0F 10 05 48 A5  movsd       xmm0,mmword ptr [000000000007A658h]
+                    07 00
+  0000000000000110: F2 0F 11 40 10     movsd       mmword ptr [rax+10h],xmm0
+  0000000000000115: C6 40 18 00        mov         byte ptr [rax+18h],0
+  0000000000000119: 48 8D 44 24 30     lea         rax,[rsp+30h]
+  000000000000011E: 48 89 44 24 20     mov         qword ptr [rsp+20h],rax
+  0000000000000123: 48 8D 85 28 02 00  lea         rax,[rbp+0000000000000228h]
+                    00
+  000000000000012A: 48 89 44 24 28     mov         qword ptr [rsp+28h],rax
+  000000000000012F: 48 8D 54 24 20     lea         rdx,[rsp+20h]
+  0000000000000134: 48 8D 0D D5 BF 09  lea         rcx,[000000000009C110h]
+                    00
+  000000000000013B: E8 D0 55 00 00     call        0000000000005710
+  0000000000000140: 90                 nop
+  0000000000000141: 4C 8D 0D 48 FF FC  lea         r9,[FFFFFFFFFFFD0090h]
+                    FF
+  0000000000000148: BA 28 00 00 00     mov         edx,28h
+  000000000000014D: 44 8D 42 EB        lea         r8d,[rdx-15h]
+  0000000000000151: 48 8D 4C 24 30     lea         rcx,[rsp+30h]
+  0000000000000156: E8 59 D7 02 00     call        000000000002D8B4
+  000000000000015B: 48
+  000000000000015C: 8D
+  000000000000015D: 0D
+
+  Summary
+
+         15E .text
