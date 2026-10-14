@@ -99,6 +99,7 @@ function createBridge(ps, loadNative) {
     const caps = api.capabilities();
     if (caps.protocol !== 1) throw new Error("Gaslightr native protocol version mismatch.");
     if (config.detailOnly && !caps.detailOnly) throw new Error(caps.detailOnlyReason || "Detail-Only mode is unavailable in this build.");
+    if (config.mode === "neural" && !caps.neuralInference) throw new Error(caps.neuralInferenceReason || "Neural inference is disabled in this host runtime.");
     return caps;
   }
   return {

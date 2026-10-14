@@ -12,7 +12,7 @@ function settings(value = {}) {
   const preset = number("preset", 0, 2);
   if (!Number.isInteger(preset)) throw new Error("Invalid performance preset");
   const mode = value.mode === undefined ? undefined : String(value.mode);
-  if (mode !== undefined && !["enhancement", "validation"].includes(mode)) throw new Error("Invalid mode");
+  if (mode !== undefined && !["enhancement", "validation", "neural"].includes(mode)) throw new Error("Invalid mode");
   return { intensity: number("intensity", 0.5, 1), structure: number("structure", 0, 1),
     feather: number("feather", 0, 32), preset, style, detailOnly: value.detailOnly === true,
     ...(mode ? { mode } : {}) };

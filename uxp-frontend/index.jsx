@@ -78,6 +78,7 @@ for (const key of ["style", "preset", "detailOnly", "mode"]) {
 
 function updateModeUI() {
   const isValidation = state.mode === "validation";
+  const isNeural = state.mode === "neural";
   const enhancement = element("enhancementSettings");
   if (enhancement) enhancement.style.display = isValidation ? "none" : "";
 
@@ -85,19 +86,27 @@ function updateModeUI() {
   if (note) {
     note.textContent = isValidation
       ? "RGB passes through FP16 textures. Original alpha is preserved."
-      : "Linear float32 pipeline · 7×7 luminance structure filter · smoothstep feathering.";
+      : isNeural
+        ? "Hardware-accelerated DLSS-D Ray Reconstruction with synthetic GBuffer pipeline."
+        : "Linear float32 pipeline · 7×7 luminance structure filter · smoothstep feathering.";
   }
 
   const applyBtn = element("apply");
   if (applyBtn) {
-    applyBtn.textContent = isValidation ? "Create validation layer" : "Enhance layer";
+    applyBtn.textContent = isValidation
+      ? "Create validation layer"
+      : isNeural
+        ? "Enhance layer (Neural)"
+        : "Enhance layer";
   }
 
   const backend = element("backendStatus");
   if (backend) {
     backend.textContent = isValidation
       ? "GPU validation mode · raw D3D12 copy · neural inference off"
-      : "Local enhancement mode · GPU transport + 7×7 structure filter";
+      : isNeural
+        ? "Neural mode · NVIDIA DLSS-D Ray Reconstruction · Host safety gate active"
+        : "Local enhancement mode · GPU transport + 7×7 structure filter";
   }
 
   for (const control of document.querySelectorAll("#controls sp-slider, #controls input, #style, #preset")) {
@@ -178,15 +187,16 @@ async function run(apply) {
   pendingPreview = false;
   const current = ++revision;
   const isValidation = state.mode === "validation";
+  const isNeural = state.mode === "neural";
 
   element("apply").disabled = element("refresh").disabled = true;
   element("cancel").disabled = false;
-  status(apply ? (isValidation ? "Running GPU validation…" : "Enhancing layer…") : "Rendering preview…");
+  status(apply ? (isValidation ? "Running GPU validation…" : isNeural ? "Running neural enhancement…" : "Enhancing layer…") : "Rendering preview…");
 
   try {
     if (apply) {
       await bridge.apply({ ...state });
-      status(isValidation ? "GPU validation layer created. No neural inference ran." : "Enhanced layer created.");
+      status(isValidation ? "GPU validation layer created. No neural inference ran." : isNeural ? "Neural enhanced layer created." : "Enhanced layer created.");
     } else {
       const result = await bridge.preview({ ...state });
       if (revision === current) {

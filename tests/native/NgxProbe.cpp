@@ -27,6 +27,8 @@
 #include <mutex>
 #include <cwchar>
 
+#include "NeuralBackend.h"
+
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
 
@@ -1514,8 +1516,87 @@ int main() {
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // Phase 10: Production NeuralBackend Integration Verification
+    // ═════════════════════════════════════════════════════════════════════
     std::cout << "\n=================================================================\n";
-    std::cout << " Phase 9 NGX Probing Complete. Photoshop host remains protected.\n";
+    std::cout << " Phase 10: Testing Production NeuralBackend Runtime Pipeline\n";
+    std::cout << "=================================================================\n";
+    {
+        auto& backend = Gaslightr::NeuralBackend::GetInstance();
+        std::cout << "  [1] Initializing NeuralBackend::InitializeExplicit (DLSS-D 512->1024)...\n";
+        auto initRes = backend.InitializeExplicit(device.Get(), 512, 512, 1024, 1024, true, 2);
+        if (!initRes) {
+            std::wcout << L"    [FAIL] InitializeExplicit failed: " << initRes.detail << L"\n";
+        } else {
+            std::cout << "    [SUCCESS] NeuralBackend initialized! IsLoaded=" << backend.IsLoaded()
+                      << ", IsReady=" << backend.IsReady() << "\n";
+
+            D3D12_COMMAND_QUEUE_DESC qDesc{};
+            qDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+            ComPtr<ID3D12CommandQueue> testQueue;
+            device->CreateCommandQueue(&qDesc, IID_PPV_ARGS(&testQueue));
+
+            ComPtr<ID3D12CommandAllocator> testAlloc;
+            device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&testAlloc));
+            ComPtr<ID3D12GraphicsCommandList> testCmdList;
+            device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, testAlloc.Get(), nullptr, IID_PPV_ARGS(&testCmdList));
+
+            ComPtr<ID3D12Resource> pTestColor = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestDepth = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestMVec = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestNormals = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestRoughness = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestDiffuse = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestSpecular = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ComPtr<ID3D12Resource> pTestOutput = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            Gaslightr::NVNGX_EvaluationInputs evalInputs{};
+            evalInputs.pColorInput = pTestColor.Get();
+            evalInputs.pDepthBuffer = pTestDepth.Get();
+            evalInputs.pMotionVectors = pTestMVec.Get();
+            evalInputs.pNormals = pTestNormals.Get();
+            evalInputs.pRoughness = pTestRoughness.Get();
+            evalInputs.pDiffuseAlbedo = pTestDiffuse.Get();
+            evalInputs.pSpecularAlbedo = pTestSpecular.Get();
+            evalInputs.MotionVectorScaleX = 1.0f;
+            evalInputs.MotionVectorScaleY = 1.0f;
+            evalInputs.CameraJitterX = 0.0f;
+            evalInputs.CameraJitterY = 0.0f;
+            evalInputs.FrameIndex = 0;
+            evalInputs.ResetHistory = true;
+
+            std::cout << "  [2] Evaluating NeuralBackend::EvaluateExplicit on D3D12 command list...\n";
+            auto evalRes = backend.EvaluateExplicit(testCmdList.Get(), evalInputs, pTestOutput.Get());
+            if (!evalRes) {
+                std::wcout << L"    [FAIL] EvaluateExplicit failed: " << evalRes.detail << L"\n";
+            } else {
+                std::cout << "    [SUCCESS] NeuralBackend evaluated cleanly on RTX 4080 SUPER!\n";
+            }
+
+            testCmdList->Close();
+            ID3D12CommandList* lists[] = { testCmdList.Get() };
+            testQueue->ExecuteCommandLists(1, lists);
+
+            // Synchronize
+            ComPtr<ID3D12Fence> fence;
+            device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+            testQueue->Signal(fence.Get(), 1);
+            HANDLE hEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (hEvent) {
+                fence->SetEventOnCompletion(1, hEvent);
+                WaitForSingleObject(hEvent, INFINITE);
+                CloseHandle(hEvent);
+            }
+
+            std::cout << "  [3] Shutting down NeuralBackend...\n";
+            backend.Shutdown();
+            std::cout << "    [SUCCESS] NeuralBackend shut down cleanly. IsReady=" << backend.IsReady() << "\n";
+        }
+    }
+
+    std::cout << "\n=================================================================\n";
+    std::cout << " Phase 9 & 10 NGX Probing Complete. Photoshop host remains protected.\n";
     std::cout << "=================================================================\n";
 
     return 0;

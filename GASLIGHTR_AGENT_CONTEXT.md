@@ -272,16 +272,19 @@ Standalone probing in `GaslightrNgxProbe` (outside Photoshop) successfully achie
      - `[+] CreateFeature (DLAA/DLSS-D): 0x1 (NVSDK_NGX_Result_Success)`
      - `[+] EvaluateFeature (DLAA/DLSS-D) Return: 0x1 (NVSDK_NGX_Result_Success)`!
 
-### Phase 10: Synthetic GBuffer Pipeline & Host Integration (In Progress)
+### Phase 10: Synthetic GBuffer Pipeline & Production NeuralBackend Integration (Completed & Verified)
 
-1. **Synthetic GBuffer Allocation in `PipelineSimulator`:**
-   - Pre-allocated synthetic normal buffer (flat perpendicular unit normal `(0.0f, 0.0f, 1.0f, 0.0f)` in FP16).
-   - Pre-allocated synthetic roughness buffer (neutral `0.5f` in FP16).
-   - Pre-allocated synthetic specular albedo buffer (dielectric baseline `0.04f` in FP16).
-   - Wired synthetic GBuffer resources into `NVNGX_EvaluationInputs` for temporal warmup and multi-pass loops.
-2. **Host Protection Rule Enforced:**
-   - `kNeuralInferenceAvailable = false` in `src/BackendCapabilities.h` remains strictly enforced inside `Photoshop.exe` until the complete synthetic pipeline is validated end-to-end.
-   - Native CTest suites (100% passing) and frontend suites (26/26 passing) confirm zero regressions.
+1. **Production `NeuralBackend` Direct3D 12 Bridge:**
+   - Authored bit-exact `include/nvngx_d3d12.h` interface mirroring `_nvngx.dll` parameter vtable and reverse-engineered export signatures (`NVSDK_NGX_D3D12_Init_ProjectID`, `Init_Ext`, `AllocateParameters`, `CreateFeature`, `EvaluateFeature`, `ReleaseFeature`, `Shutdown`).
+   - Implemented `NeuralBackend::InitializeExplicit`, `EvaluateExplicit`, and `Shutdown` in `src/NeuralBackend.cpp` with DriverStore discovery, altered search path loading, synthetic GUID handshake, and internal direct command list/queue execution with fence synchronization during feature creation.
+   - Added collision guard in `EnsureWinVerifyTrustHook()` to detect existing x64 jump patches and prevent trampoline corruption across testing boundaries.
+   - Live verified via `GaslightrNgxProbe.exe` on RTX 4080 SUPER: `InitializeExplicit` (DLSS-D 512→1024), `EvaluateExplicit` on Direct3D 12 command list, and clean `Shutdown` all succeeded with exit code 0!
+
+2. **Panel UI Exposure & Safety Gates:**
+   - Added Neural Enhancement (`mode = "neural"`) choice to `uxp-frontend/index.html` and `uxp-frontend/index.jsx`.
+   - Updated `uxp-frontend/pixels.js` and `uxp-frontend/bridge.js` to validate `neural` mode against the runtime capability flag (`caps.neuralInference`).
+   - Verified fail-safe behavior: When `kNeuralInferenceAvailable = false` in `src/BackendCapabilities.h`, the UI clearly indicates the active host safety gate and safely aborts before modifying any Photoshop state.
+   - Preserved 100% CTest native test suite pass rate and increased frontend automated test suite to 27/27 passing.
 
 ## 11. Reference hierarchy and maintenance
 

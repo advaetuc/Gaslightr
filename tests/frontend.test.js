@@ -133,6 +133,11 @@ test("unavailable detail mode fails before modifying Photoshop", async () => {
   await assert.rejects(h.bridge.apply({ detailOnly: true }), /unavailable/);
   assert.equal(h.calls.length, 0);
 });
+test("unavailable neural enhancement mode fails before modifying Photoshop", async () => {
+  const h = host();
+  await assert.rejects(h.bridge.apply({ mode: "neural" }), /disabled|unavailable/);
+  assert.equal(h.calls.length, 0);
+});
 test("SDK send failures remove listeners without dangling timeout rejections", async () => {
   const h = host();
   h.ps.messaging.sendSDKPluginMessage = async () => { throw new Error("companion missing"); };
