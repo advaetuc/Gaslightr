@@ -24,6 +24,8 @@
 #include <vector>
 #include <filesystem>
 #include <sstream>
+#include <mutex>
+#include <cwchar>
 
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
@@ -594,6 +596,137 @@ static std::string CheckAuthenticodeSignature(const std::wstring& filePath) {
     }
 }
 
+// ── In-Process WinVerifyTrust Detour & IAT Hooks (Option A) ──────────────────
+
+typedef LONG(WINAPI* FnWinVerifyTrust)(HWND, GUID*, LPVOID);
+static FnWinVerifyTrust g_OrigWinVerifyTrust = nullptr;
+static BYTE g_OriginalBytes[14] = {0};
+static std::mutex g_HookMutex;
+
+// Helper: case-insensitive wide substring check for nvngx_dlssnr.dll or nvngx_dlssd.dll
+static bool IsTargetDlssNrBinary(LPCWSTR filePath) {
+    if (!filePath) return false;
+    wchar_t lowerPath[MAX_PATH] = {0};
+    wcsncpy_s(lowerPath, filePath, _TRUNCATE);
+    _wcslwr_s(lowerPath);
+    return (wcsstr(lowerPath, L"nvngx_dlssnr.dll") != nullptr || wcsstr(lowerPath, L"nvngx_dlssd.dll") != nullptr);
+}
+
+// Detour callback invoked when _nvngx.dll verifies DLL signatures
+static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVTData) {
+    auto* pData = reinterpret_cast<WINTRUST_DATA*>(pWVTData);
+    if (pData && pData->dwUnionChoice == WTD_CHOICE_FILE && pData->pFile && pData->pFile->pcwszFilePath) {
+        std::wcout << L"  [WVT-HOOK] Inspecting file: " << pData->pFile->pcwszFilePath << std::endl;
+        if (IsTargetDlssNrBinary(pData->pFile->pcwszFilePath)) {
+            std::cout << "  [WVT-HOOK] WinVerifyTrust intercepted for nvngx_dlssnr.dll -> Spoofing ERROR_SUCCESS (0x0)!\n";
+            return ERROR_SUCCESS; // 0x0
+        }
+    }
+
+    // Temporarily restore prologue to invoke original WinVerifyTrust for non-target binaries
+    std::lock_guard<std::mutex> lock(g_HookMutex);
+    DWORD oldProtect = 0;
+    VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, PAGE_EXECUTE_READWRITE, &oldProtect);
+    memcpy(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), g_OriginalBytes, 14);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
+
+    LONG status = g_OrigWinVerifyTrust(hwnd, pgActionID, pWVTData);
+
+    // Re-apply 14-byte x64 absolute jump: FF 25 00 00 00 00 [8-byte target]
+    BYTE jmpPatch[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    uint64_t targetAddr = reinterpret_cast<uint64_t>(&HookedWinVerifyTrust);
+    memcpy(&jmpPatch[6], &targetAddr, sizeof(targetAddr));
+    memcpy(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), jmpPatch, 14);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
+    VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, oldProtect, &oldProtect);
+
+    return status;
+}
+
+// Patch a loaded module's Import Address Table (IAT) for wintrust.dll!WinVerifyTrust
+static bool PatchModuleIAT(HMODULE hModule) {
+    if (!hModule) return false;
+    auto* base = reinterpret_cast<BYTE*>(hModule);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+
+    DWORD importRVA = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!importRVA) return false;
+
+    auto* importDesc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + importRVA);
+    for (; importDesc->Name != 0; ++importDesc) {
+        const char* modName = reinterpret_cast<const char*>(base + importDesc->Name);
+        if (_stricmp(modName, "wintrust.dll") != 0) continue;
+
+        auto* origFirstThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(
+            base + (importDesc->OriginalFirstThunk ? importDesc->OriginalFirstThunk : importDesc->FirstThunk));
+        auto* firstThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + importDesc->FirstThunk);
+
+        for (; origFirstThunk->u1.AddressOfData != 0; ++origFirstThunk, ++firstThunk) {
+            if (IMAGE_SNAP_BY_ORDINAL64(origFirstThunk->u1.Ordinal)) continue;
+            auto* importByName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + origFirstThunk->u1.AddressOfData);
+            if (strcmp(reinterpret_cast<const char*>(importByName->Name), "WinVerifyTrust") == 0) {
+                DWORD oldProtect = 0;
+                VirtualProtect(&firstThunk->u1.Function, sizeof(ULONGLONG), PAGE_READWRITE, &oldProtect);
+                firstThunk->u1.Function = reinterpret_cast<ULONGLONG>(&HookedWinVerifyTrust);
+                VirtualProtect(&firstThunk->u1.Function, sizeof(ULONGLONG), oldProtect, &oldProtect);
+                std::cout << "  [WVT-HOOK] Patched IAT entry for WinVerifyTrust in module 0x"
+                          << std::hex << reinterpret_cast<uintptr_t>(hModule) << std::dec << "\n";
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Call BEFORE NVSDK_NGX_D3D12_Init_Ext / NVSDK_NGX_D3D12_Init_ProjectID
+static bool InstallWinVerifyTrustHooks(const std::wstring& driverStoreDir) {
+    HMODULE hWintrust = LoadLibraryW(L"wintrust.dll");
+    if (!hWintrust) return false;
+
+    g_OrigWinVerifyTrust = reinterpret_cast<FnWinVerifyTrust>(
+        GetProcAddress(hWintrust, "WinVerifyTrust"));
+    if (!g_OrigWinVerifyTrust) return false;
+
+    // 1. Pre-load DriverStore trampoline & engine so their IATs are in memory before Init
+    std::wstring trampolinePath = driverStoreDir.empty() ?
+        L"C:\\WINDOWS\\System32\\DriverStore\\FileRepository\\nv_dispi.inf_amd64_feedb8c0271ca811\\nvngx.dll" :
+        (driverStoreDir + L"\\nvngx.dll");
+    std::wstring enginePath = driverStoreDir.empty() ?
+        L"C:\\WINDOWS\\System32\\DriverStore\\FileRepository\\nv_dispi.inf_amd64_feedb8c0271ca811\\_nvngx.dll" :
+        (driverStoreDir + L"\\_nvngx.dll");
+
+    SetDllDirectoryW(driverStoreDir.c_str());
+    HMODULE hTrampoline = LoadLibraryExW(trampolinePath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    HMODULE hEngine = LoadLibraryExW(enginePath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+
+    PatchModuleIAT(GetModuleHandleW(nullptr));
+    if (hTrampoline) PatchModuleIAT(hTrampoline);
+    if (hEngine) PatchModuleIAT(hEngine);
+
+    // 2. Install 14-byte inline prologue hook on wintrust.dll!WinVerifyTrust
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        return false;
+    }
+    memcpy(g_OriginalBytes, reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
+
+    BYTE jmpPatch[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    uint64_t targetAddr = reinterpret_cast<uint64_t>(&HookedWinVerifyTrust);
+    memcpy(&jmpPatch[6], &targetAddr, sizeof(targetAddr));
+
+    memcpy(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), jmpPatch, 14);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
+    VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, oldProtect, &oldProtect);
+
+    std::cout << "  [WVT-HOOK] Inline + IAT hooks installed on wintrust.dll!WinVerifyTrust (0x"
+              << std::hex << reinterpret_cast<uintptr_t>(g_OrigWinVerifyTrust) << std::dec << ")\n";
+    return true;
+}
+
 // ── Main Diagnostic Suite ───────────────────────────────────────────────────
 
 int main() {
@@ -661,6 +794,10 @@ int main() {
         std::cout << "    DisableNgxSignatureChecks: " << (hasDisable ? std::to_string(disableSig) : "NOT_PRESENT") << "\n";
         RegCloseKey(hNvKey);
     }
+
+    // ── 1B. Install In-Process WinVerifyTrust Hooks (Option A) ──────────────
+    std::cout << "\n[Step 1B] Installing In-Process WinVerifyTrust Hooks...\n";
+    InstallWinVerifyTrustHooks(driverStoreDir);
 
     // ── 2. Initialize Direct3D 12 Device & DXGI Adapter ─────────────────────
     std::cout << "\n[Step 2] Initializing D3D12 device and DXGI adapter...\n";

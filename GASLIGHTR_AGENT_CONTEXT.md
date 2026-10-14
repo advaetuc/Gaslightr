@@ -101,6 +101,7 @@ Gaslightr/
 |   `-- GpuValidationTests.cpp     explicitly opt-in real GPU tests
 `-- docs/
     |-- GASLIGHTR_AGENT_CONTEXT.md pointer to root master
+    |-- NGX_DLSSNR_HASH_MISMATCH_DIAGNOSTIC.md deep diagnostic on Authenticode hash mismatch
     |-- PHASE7_GPU_VALIDATION.md    host acceptance procedure and history
     |-- OFFLINE_UXP_IMPLEMENTATION_GUIDE.md
     |-- IMPLEMENTATION_STATUS.md   dated historical status; root takes precedence
