@@ -76,6 +76,8 @@ for (const key of ["style", "preset", "detailOnly", "mode"]) {
   }
 }
 
+let nativeCapabilities = null;
+
 function updateModeUI() {
   const isValidation = state.mode === "validation";
   const isNeural = state.mode === "neural";
@@ -98,6 +100,7 @@ function updateModeUI() {
       : isNeural
         ? "Enhance layer (Neural)"
         : "Enhance layer";
+    applyBtn.disabled = isNeural && !(nativeCapabilities && nativeCapabilities.neuralInference);
   }
 
   const backend = element("backendStatus");
@@ -105,7 +108,9 @@ function updateModeUI() {
     backend.textContent = isValidation
       ? "GPU validation mode · raw D3D12 copy · neural inference off"
       : isNeural
-        ? "Neural mode · NVIDIA DLSS-D Ray Reconstruction · Host safety gate active"
+        ? (nativeCapabilities && nativeCapabilities.neuralInference
+            ? "Neural mode · NVIDIA DLSS-D Ray Reconstruction active"
+            : "Neural mode · Host safety gate active (Set GASLIGHTR_ENABLE_NEURAL=1 to enable)")
         : "Local enhancement mode · GPU transport + 7×7 structure filter";
   }
 
@@ -210,6 +215,7 @@ async function run(apply) {
   } finally {
     element("apply").disabled = element("refresh").disabled = false;
     element("cancel").disabled = true;
+    updateModeUI();
     if (pendingPreview) schedule();
   }
 }
@@ -291,11 +297,11 @@ window.addEventListener("unload", () => {
 
 async function initializeNativeStatus() {
   try {
-    const caps = await bridge.capabilities();
-    console.log(`[Gaslightr] native capabilities ${JSON.stringify(caps)}`);
+    nativeCapabilities = await bridge.capabilities();
+    console.log(`[Gaslightr] native capabilities ${JSON.stringify(nativeCapabilities)}`);
     updateModeUI();
-    element("detailOnly").disabled = !caps.detailOnly;
-    element("detailStatus").textContent = caps.detailOnly ? "" : caps.detailOnlyReason;
+    element("detailOnly").disabled = !nativeCapabilities.detailOnly;
+    element("detailStatus").textContent = nativeCapabilities.detailOnly ? "" : nativeCapabilities.detailOnlyReason;
   } catch (error) {
     element("backendStatus").textContent = "Native processing unavailable.";
     element("detailOnly").disabled = true;

@@ -32,6 +32,13 @@ int main() {
         Reject([&] { ValidateTile(pixels, { 1, 1, 0, false }); });
         pixels[0] = 0.0f; pixels[3] = -0.1f;
         Reject([&] { ValidateTile(pixels, { 1, 1, 0, false }); });
+        Check(static_cast<uint32_t>(ExecutionMode::Enhancement) == 0);
+        Check(static_cast<uint32_t>(ExecutionMode::Validation) == 1);
+        Check(static_cast<uint32_t>(ExecutionMode::Neural) == 2);
+        pixels[3] = 0.5f;
+        TileRequest neuralReq{ 1, 1, 0, false, 0.5f, 0.0f, 0.0f, false, ExecutionMode::Neural };
+        ValidateTile(pixels, neuralReq);
+        Check(neuralReq.executionMode == ExecutionMode::Neural);
         std::cout << "Pixel contract checks passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

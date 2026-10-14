@@ -74,11 +74,14 @@ function createBridge(ps, loadNative) {
         throw new Error("Unexpected Photoshop tile dimensions.");
       // Own the bytes retained by preview after PhotoshopImageData.dispose().
       const input = new Float32Array(pixels.rgba(await image.imageData.getData({ chunky: true }), width, height, components));
-      const isValidation = config.mode === "validation" || (config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
+      const isNeural = config.mode === "neural";
+      const isValidation = config.mode === "validation" || (!isNeural && config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
+      const mode = config.mode || (isValidation ? "validation" : "enhancement");
       const output = await api.processTile(input, {
         width, height, preset: config.preset, detailOnly: config.detailOnly,
         intensity: config.intensity, structure: config.structure,
-        validationOnly: isValidation
+        validationOnly: isValidation,
+        mode
       });
       checkCancel(context);
       if (!(output instanceof Float32Array) || output.length !== input.length)
@@ -118,9 +121,12 @@ function createBridge(ps, loadNative) {
     apply: value => modal("Gaslightr enhancement", async context => {
       const config = pixels.settings(value), api = await native(), caps = validateCapabilities(api, config), src = source();
       if (caps.sdkMessaging) await sendInModal("configure", { documentID: src.documentID, layerID: src.layerID, bounds: src.bounds, ...config });
-      const validation = config.mode === "validation" || (config.mode !== "enhancement" && caps.executionMode === "d3d12-validation-copy");
-      const history = await context.hostControl.suspendHistory({ documentID: src.documentID,
-        name: validation ? "Gaslightr GPU validation" : "Gaslightr enhancement" });
+      const isNeural = config.mode === "neural";
+      const validation = config.mode === "validation" || (!isNeural && config.mode !== "enhancement" && caps.executionMode === "d3d12-validation-copy");
+      const historyName = isNeural
+        ? "Gaslightr neural enhancement"
+        : (validation ? "Gaslightr GPU validation" : "Gaslightr enhancement");
+      const history = await context.hostControl.suspendHistory({ documentID: src.documentID, name: historyName });
       let committed = false;
       try {
         let targetID = null, witness = null, writes = 0;
@@ -142,7 +148,8 @@ function createBridge(ps, loadNative) {
               }
               // Read/process the first source tile before creating the target.
               if (targetID === null) {
-                const target = await src.document.createLayer({ name: `${src.layerName} · Gaslightr${validation ? " GPU validation" : ""}` });
+                const targetSuffix = isNeural ? " neural enhancement" : (validation ? " GPU validation" : "");
+                const target = await src.document.createLayer({ name: `${src.layerName} · Gaslightr${targetSuffix}` });
                 targetID = target.id;
                 if (!Number.isSafeInteger(targetID) || targetID === src.layerID)
                   throw new Error("Photoshop did not provide a distinct output layer ID.");

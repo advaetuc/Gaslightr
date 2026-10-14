@@ -43,6 +43,31 @@ napi_value Process(napi_env env, napi_callback_info info) {
         request.height = Integer(env, args[1], "height", 2048);
         request.preset = static_cast<int>(Integer(env, args[1], "preset", 2));
         Check(napi_get_value_bool(env, Property(env, args[1], "detailOnly"), &request.detailOnly));
+        napi_value valOnlyVal = Property(env, args[1], "validationOnly");
+        if (valOnlyVal) {
+            bool b = false;
+            if (napi_get_value_bool(env, valOnlyVal, &b) == napi_ok) {
+                request.validationOnly = b;
+                if (b) request.executionMode = Gaslightr::ExecutionMode::Validation;
+            }
+        }
+        napi_value modeVal = Property(env, args[1], "mode");
+        if (modeVal) {
+            char modeStr[32]{};
+            size_t modeLen = 0;
+            if (napi_get_value_string_utf8(env, modeVal, modeStr, sizeof(modeStr), &modeLen) == napi_ok) {
+                if (std::strcmp(modeStr, "neural") == 0) {
+                    request.executionMode = Gaslightr::ExecutionMode::Neural;
+                    request.validationOnly = false;
+                } else if (std::strcmp(modeStr, "validation") == 0) {
+                    request.executionMode = Gaslightr::ExecutionMode::Validation;
+                    request.validationOnly = true;
+                } else if (std::strcmp(modeStr, "enhancement") == 0) {
+                    request.executionMode = Gaslightr::ExecutionMode::Enhancement;
+                    request.validationOnly = false;
+                }
+            }
+        }
         // Synchronous borrow: the local handle roots the allocation and JS on
         // this isolate cannot mutate/detach it during GPU processing. No JS
         // pointer escapes this callback; shared backing memory is rejected.

@@ -138,6 +138,22 @@ test("unavailable neural enhancement mode fails before modifying Photoshop", asy
   await assert.rejects(h.bridge.apply({ mode: "neural" }), /disabled|unavailable/);
   assert.equal(h.calls.length, 0);
 });
+test("available neural enhancement passes mode: 'neural' and commits neural history transaction", async () => {
+  const h = host();
+  let receivedOptions = null;
+  h.api.capabilities = () => ({ protocol: 1, detailOnly: false, sdkMessaging: true, neuralInference: true, executionMode: "d3d12-neural-dlssd" });
+  h.api.processTile = async (input, options) => {
+    receivedOptions = options;
+    return input.slice();
+  };
+  const targetId = await h.bridge.apply({ mode: "neural" });
+  assert.equal(targetId, 8);
+  assert.equal(receivedOptions?.mode, "neural");
+  assert.equal(receivedOptions?.validationOnly, false);
+  assert.ok(h.calls.some(c => Array.isArray(c) && c[0] === "historyName" && c[1] === "Gaslightr neural enhancement"));
+  assert.ok(h.calls.some(c => Array.isArray(c) && c[0] === "layerName" && c[1].includes("neural enhancement")));
+  assert.deepEqual(h.calls.at(-1), ["resume", true]);
+});
 test("SDK send failures remove listeners without dangling timeout rejections", async () => {
   const h = host();
   h.ps.messaging.sendSDKPluginMessage = async () => { throw new Error("companion missing"); };

@@ -870,7 +870,8 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
     }
 
     // ── Direct3D 12 Compute Shader Local Enhancement (Phase 8A/8B) ───────
-    if (!kNeuralInferenceAvailable) {
+    NeuralBackend& backend = NeuralBackend::GetInstance();
+    if (!kNeuralInferenceAvailable || config.useComputePipeline || !backend.IsReady()) {
         ID3D12Resource* currentInput = pInputTexture;
         ID3D12Resource* currentOutput = m_synth.pingTexture.Get();
         const uint32_t passes = (config.enhancePasses > 0) ? config.enhancePasses : 1;
@@ -892,12 +893,6 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
     if (config.warmupFrames < 24 || config.warmupFrames > 32 ||
         config.enhancePasses < 1 || config.enhancePasses > 4) {
         return DX12Result::Fail(E_INVALIDARG, L"Expected 24-32 warmup frames and 1-4 enhancement passes.");
-    }
-
-    NeuralBackend& backend = NeuralBackend::GetInstance();
-    if (!backend.IsReady()) {
-        return DX12Result::Fail(E_NOT_VALID_STATE,
-            L"NeuralBackend is not ready.");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

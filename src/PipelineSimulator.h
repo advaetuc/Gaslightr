@@ -40,6 +40,8 @@ namespace Gaslightr {
 struct SimulatorConfig {
     // Explicit GPU copy validation: never invokes the neural runtime.
     bool validationOnly = false;
+    // Explicit compute shader pipeline flag (Phase 11 fallback & local enhancement)
+    bool useComputePipeline = false;
     // Number of temporal warmup frames.  The neural network needs 24–32
     // frames of jittered history before its temporal accumulation produces
     // high-quality output.  (blueprint: "exactly 24 to 32 times")

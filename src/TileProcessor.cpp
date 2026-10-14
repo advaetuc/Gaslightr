@@ -10,7 +10,6 @@
 namespace Gaslightr {
 namespace {
 std::mutex processorMutex;
-const int moduleAnchor = 0;
 std::string Utf8(const std::wstring& message) {
     const int size = WideCharToMultiByte(CP_UTF8, 0, message.data(), static_cast<int>(message.size()), nullptr, 0, nullptr, nullptr);
     if (size <= 0) return "Native graphics operation failed.";
@@ -24,16 +23,6 @@ void Require(const DX12Result& result) {
 void RequireHR(HRESULT hr, const char* message) {
     if (FAILED(hr)) throw std::runtime_error(message);
 }
-std::filesystem::path RuntimePath() {
-    HMODULE module = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&moduleAnchor), &module)) throw std::runtime_error("Cannot locate the native module.");
-    std::wstring path(32768, L'\0');
-    const DWORD size = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
-    if (size == 0 || size >= path.size()) throw std::runtime_error("Cannot resolve the native module path.");
-    path.resize(size);
-    return std::filesystem::path(path).parent_path() / L"nvngx_dlssnr.dll";
-}
 void Begin(DX12Context& context) {
     RequireHR(context.GetCommandAllocator()->Reset(), "Command allocator reset failed.");
     RequireHR(context.GetCommandList()->Reset(context.GetCommandAllocator(), nullptr), "Command list reset failed.");
@@ -43,6 +32,18 @@ void Submit(DX12Context& context) {
     ID3D12CommandList* lists[] = { context.GetCommandList() };
     context.GetCommandQueue()->ExecuteCommandLists(1, lists);
     Require(context.WaitForGPU());
+}
+void TransitionBarrier(ID3D12GraphicsCommandList* list, ID3D12Resource* res,
+    D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+    if (before == after || !res || !list) return;
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = res;
+    barrier.Transition.StateBefore = before;
+    barrier.Transition.StateAfter = after;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    list->ResourceBarrier(1, &barrier);
 }
 struct Drain {
     DX12Context& context;
@@ -93,26 +94,75 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
     config.validationOnly = request.validationOnly;
     config.intensity = request.intensity;
     config.structure = request.structure;
-    if (kNeuralInferenceAvailable) {
-        const auto runtime = RuntimePath();
-        if (!std::filesystem::is_regular_file(runtime))
-            throw std::runtime_error("nvngx_dlssnr.dll is missing beside the native module.");
-        NVNGX_InitializationParams init{ request.width, request.height, request.width, request.height, request.preset };
-        if (!backend.Initialize(runtime.c_str(), context.GetDevice(), &init))
-            throw std::runtime_error(Utf8(backend.GetLastError()));
-    } else {
-        if (config.validationOnly) {
-            OutputDebugStringA("[Gaslightr] D3D12 validation copy; neural DLL is not loaded.\n");
-        } else {
-            OutputDebugStringA("[Gaslightr] D3D12 compute shader enhancement; neural DLL is not loaded.\n");
-        }
-    }
     Begin(context);
     Require(memory.UploadToGPU(tile, rgba.data(), request.width * 4 * sizeof(float), SourcePixelFormat::RGBA_32F, context.GetCommandList()));
     Submit(context);
+
     ID3D12Resource* output = nullptr;
-    Require(simulator.ExecuteFullPipeline(tile.gpuTexture.Get(), &output, config));
-    // Simulator guarantees shader-readable output; MemoryBridge performs the
+    bool neuralRan = false;
+
+    if (!request.validationOnly && request.executionMode == ExecutionMode::Neural && kNeuralInferenceAvailable) {
+        try {
+            OutputDebugStringA("[Gaslightr] Dispatching NeuralBackend DLSS-D Ray Reconstruction...\n");
+            auto initRes = backend.InitializeExplicit(context.GetDevice(), request.width, request.height,
+                request.width, request.height, true, request.preset);
+            if (initRes && backend.IsReady()) {
+                const auto& synth = simulator.GetSyntheticResources();
+                NVNGX_EvaluationInputs evalInputs{};
+                evalInputs.pColorInput = tile.gpuTexture.Get();
+                evalInputs.pDepthBuffer = synth.depthBuffer.Get();
+                evalInputs.pMotionVectors = synth.motionVectors.Get();
+                evalInputs.pNormals = synth.normalsTexture.Get();
+                evalInputs.pRoughness = synth.roughnessTexture.Get();
+                evalInputs.pDiffuseAlbedo = tile.gpuTexture.Get();
+                evalInputs.pSpecularAlbedo = synth.specularAlbedoTexture.Get();
+                evalInputs.MotionVectorScaleX = 1.0f;
+                evalInputs.MotionVectorScaleY = 1.0f;
+                evalInputs.CameraJitterX = 0.0f;
+                evalInputs.CameraJitterY = 0.0f;
+                evalInputs.FrameIndex = 0;
+                evalInputs.ResetHistory = true;
+
+                Begin(context);
+                TransitionBarrier(context.GetCommandList(), synth.pingTexture.Get(),
+                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+                auto evalRes = backend.EvaluateExplicit(context.GetCommandList(), evalInputs, synth.pingTexture.Get());
+                if (evalRes) {
+                    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    TransitionBarrier(context.GetCommandList(), synth.pingTexture.Get(),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable);
+                    Submit(context);
+                    output = synth.pingTexture.Get();
+                    neuralRan = true;
+                    OutputDebugStringA("[Gaslightr] NeuralBackend DLSS-D Ray Reconstruction evaluated cleanly.\n");
+                } else {
+                    TransitionBarrier(context.GetCommandList(), synth.pingTexture.Get(),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
+                    context.GetCommandList()->Close();
+                    context.WaitForGPU();
+                    OutputDebugStringA("[Gaslightr] NeuralBackend::EvaluateExplicit failed; falling back to compute shader.\n");
+                }
+            } else {
+                OutputDebugStringA("[Gaslightr] NeuralBackend::InitializeExplicit unready; falling back to compute shader.\n");
+            }
+        } catch (const std::exception& e) {
+            OutputDebugStringA("[Gaslightr] Neural exception: ");
+            OutputDebugStringA(e.what());
+            OutputDebugStringA("; falling back to compute shader.\n");
+        } catch (...) {
+            OutputDebugStringA("[Gaslightr] Unknown neural failure; falling back to compute shader.\n");
+        }
+    }
+
+    if (!neuralRan) {
+        if (!config.validationOnly) {
+            config.useComputePipeline = true;
+        }
+        Require(simulator.ExecuteFullPipeline(tile.gpuTexture.Get(), &output, config));
+    }
+    // Output is guaranteed shader-readable; MemoryBridge performs the
     // shader-resource -> copy-source transition and restores it after copying.
     tile.gpuTexture = output;
     Begin(context);

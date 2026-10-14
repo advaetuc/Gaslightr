@@ -117,6 +117,24 @@ addon_value ProcessTile(addon_env env, addon_callback_info info) noexcept {
             bool b = false;
             if (UxpAddonApis.uxp_addon_get_value_bool(env, valOnlyVal, &b) == addon_ok) {
                 request.validationOnly = b;
+                if (b) request.executionMode = ExecutionMode::Validation;
+            }
+        }
+        addon_value modeVal = Property(env, args[1], "mode");
+        if (modeVal) {
+            char modeStr[32]{};
+            size_t modeLen = 0;
+            if (UxpAddonApis.uxp_addon_get_value_string_utf8(env, modeVal, modeStr, sizeof(modeStr), &modeLen) == addon_ok) {
+                if (std::strcmp(modeStr, "neural") == 0) {
+                    request.executionMode = ExecutionMode::Neural;
+                    request.validationOnly = false;
+                } else if (std::strcmp(modeStr, "validation") == 0) {
+                    request.executionMode = ExecutionMode::Validation;
+                    request.validationOnly = true;
+                } else if (std::strcmp(modeStr, "enhancement") == 0) {
+                    request.executionMode = ExecutionMode::Enhancement;
+                    request.validationOnly = false;
+                }
             }
         }
         if (!request.width || !request.height) throw std::invalid_argument("Tile dimensions must be 1-2048.");

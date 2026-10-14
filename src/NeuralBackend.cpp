@@ -118,6 +118,26 @@ static std::wstring FindSnippetDirectory() {
     if (GetFileAttributesW(localPath) != INVALID_FILE_ATTRIBUTES) {
         return std::filesystem::current_path().wstring();
     }
+
+    wchar_t modPath[MAX_PATH]{};
+    HMODULE hModule = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&FindSnippetDirectory), &hModule) && hModule) {
+        if (GetModuleFileNameW(hModule, modPath, MAX_PATH) > 0) {
+            std::filesystem::path dir = std::filesystem::path(modPath).parent_path();
+            std::error_code ec;
+            if (std::filesystem::exists(dir / L"nvngx_dlssnr.dll", ec) ||
+                std::filesystem::exists(dir / L"nvngx_dlssd.dll", ec)) {
+                return dir.wstring();
+            }
+            if (std::filesystem::exists(dir / L"vendor" / L"nvidia" / L"incoming", ec)) {
+                return std::filesystem::canonical(dir / L"vendor" / L"nvidia" / L"incoming", ec).wstring();
+            }
+            if (std::filesystem::exists(dir / L".." / L".." / L"vendor" / L"nvidia" / L"incoming", ec)) {
+                return std::filesystem::canonical(dir / L".." / L".." / L"vendor" / L"nvidia" / L"incoming", ec).wstring();
+            }
+        }
+    }
     return L".";
 }
 

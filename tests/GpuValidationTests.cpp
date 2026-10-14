@@ -395,6 +395,31 @@ void TestTileStitchingSeamInvariance() {
     std::printf("  Tile stitching test passed: 1357x891 disjoint partition and 0 seam delta (%e) across odd boundary.\n", maxDelta);
 }
 
+void TestNeuralExecutionFallback() {
+    std::printf("[Phase 11 Test] Neural Execution Fallback / Seamless Degradation...\n");
+    const uint32_t width = 96, height = 96;
+    std::vector<float> input(static_cast<size_t>(width) * height * 4, 0.5f);
+    Gaslightr::TileRequest reqNeural{
+        .width = width,
+        .height = height,
+        .preset = 0,
+        .detailOnly = false,
+        .intensity = 0.5f,
+        .structure = 0.5f,
+        .feather = 0.0f,
+        .validationOnly = false,
+        .executionMode = Gaslightr::ExecutionMode::Neural
+    };
+    const auto output = Gaslightr::ProcessTile(input, reqNeural);
+    if (output.size() != input.size()) {
+        throw std::runtime_error("Neural fallback output size mismatch.");
+    }
+    for (size_t i = 0; i < output.size(); ++i) {
+        if (!std::isfinite(output[i])) throw std::runtime_error("Neural fallback returned non-finite pixels.");
+    }
+    std::printf("  Neural execution fallback passed: output size %zu, finite pixels, clean compute shader degradation.\n", output.size());
+}
+
 } // namespace
 
 int main() {
@@ -408,9 +433,10 @@ int main() {
         TestFloatingLayerTransparentPadding();
         TestExtremeFloatAndHdrValues();
         TestTileStitchingSeamInvariance();
+        TestNeuralExecutionFallback();
 
         std::printf("=================================================================\n");
-        std::printf("ALL PHASE 8B DIRECT3D 12 EDGE-CASE STRESS TESTS PASSED (0 SEAMS).\n");
+        std::printf("ALL DIRECT3D 12 EDGE-CASE & NEURAL FALLBACK TESTS PASSED.\n");
         std::printf("=================================================================\n");
         return 0;
     } catch (const std::exception& error) {

@@ -7,6 +7,12 @@
 #include <stdexcept>
 
 namespace Gaslightr {
+enum class ExecutionMode : uint32_t {
+    Enhancement = 0,
+    Validation  = 1,
+    Neural      = 2
+};
+
 struct TileRequest {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -16,6 +22,7 @@ struct TileRequest {
     float structure = 0.0f;
     float feather = 0.0f;
     bool validationOnly = true;
+    ExecutionMode executionMode = ExecutionMode::Enhancement;
 };
 inline void ValidateTile(std::span<const float> rgba, const TileRequest& request) {
     if (request.width == 0 || request.height == 0 || request.width > 2048 || request.height > 2048)
