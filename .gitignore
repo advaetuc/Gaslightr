@@ -1,5 +1,6 @@
 /build/
 /uxp-frontend/win/
 /vendor/
+/scratch/
 *.pdb
 CODEX_PROMPT.md

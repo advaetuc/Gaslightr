@@ -42,6 +42,10 @@ struct NVNGX_EvaluationInputs {
     ID3D12Resource* pColorInput;        // R16G16B16A16_FLOAT — the source tile
     ID3D12Resource* pMotionVectors;     // R16G16_FLOAT       — inverse jitter
     ID3D12Resource* pDepthBuffer;       // R32_FLOAT          — flat at 1.0f
+    ID3D12Resource* pNormals;           // R16G16B16A16_FLOAT — synthetic normals (0, 0, 1)
+    ID3D12Resource* pRoughness;         // R16G16B16A16_FLOAT — synthetic roughness
+    ID3D12Resource* pDiffuseAlbedo;     // R16G16B16A16_FLOAT — diffuse albedo
+    ID3D12Resource* pSpecularAlbedo;    // R16G16B16A16_FLOAT — specular albedo (0.04)
     float           MotionVectorScaleX; // Typically 1.0f
     float           MotionVectorScaleY; // Typically 1.0f
     float           CameraJitterX;      // Halton(frame, 2) - 0.5f, normalised

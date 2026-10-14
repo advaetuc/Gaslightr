@@ -381,8 +381,8 @@ DX12Result PipelineSimulator::AllocateSyntheticResources(
     }
 
     // ── 4. Ping-pong output textures: R16G16B16A16_FLOAT ─────────────────
-    //  These receive the DLSS output.  Created in COPY_DEST so the first
-    //  EvaluateNR call can write to them, then transitioned as needed.
+    //  These receive the DLSS output.  Created in COMMON so they can be
+    //  transitioned to UAV or COPY_DEST as needed.
     {
         auto r1 = CreateDefaultTexture(
             width, height, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -395,9 +395,57 @@ DX12Result PipelineSimulator::AllocateSyntheticResources(
         if (!r2) return DX12Result::Fail(r2.hr, L"Pong texture alloc failed.");
     }
 
+    // ── 5. Normals texture: R16G16B16A16_FLOAT, flat perpendicular (0, 0, 1, 0)
+    {
+        const uint32_t bpp = BytesPerPixelFor(DXGI_FORMAT_R16G16B16A16_FLOAT); // 8
+        const uint32_t srcPitch = width * bpp;
+        std::vector<uint16_t> normalData(static_cast<size_t>(width) * height * 4);
+        for (size_t i = 0; i < normalData.size(); i += 4) {
+            normalData[i + 0] = 0x0000; // X = 0.0f
+            normalData[i + 1] = 0x0000; // Y = 0.0f
+            normalData[i + 2] = 0x3C00; // Z = 1.0f (unit normal out of 2D canvas)
+            normalData[i + 3] = 0x0000; // W = 0.0f
+        }
+        auto result = CreateAndFillTexture(
+            width, height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            normalData.data(), srcPitch,
+            m_synth.normalsTexture, m_synth.normalsUpload);
+        if (!result) return DX12Result::Fail(result.hr, L"Failed to create/fill synthetic normals.");
+    }
+
+    // ── 6. Roughness texture: R16G16B16A16_FLOAT, neutral 0.5f ──────────
+    {
+        const uint32_t bpp = BytesPerPixelFor(DXGI_FORMAT_R16G16B16A16_FLOAT); // 8
+        const uint32_t srcPitch = width * bpp;
+        std::vector<uint16_t> roughnessData(static_cast<size_t>(width) * height * 4, 0x3800); // 0.5f in FP16
+        auto result = CreateAndFillTexture(
+            width, height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            roughnessData.data(), srcPitch,
+            m_synth.roughnessTexture, m_synth.roughnessUpload);
+        if (!result) return DX12Result::Fail(result.hr, L"Failed to create/fill synthetic roughness.");
+    }
+
+    // ── 7. Specular albedo texture: R16G16B16A16_FLOAT, dielectric 0.04f ─
+    {
+        const uint32_t bpp = BytesPerPixelFor(DXGI_FORMAT_R16G16B16A16_FLOAT); // 8
+        const uint32_t srcPitch = width * bpp;
+        std::vector<uint16_t> specData(static_cast<size_t>(width) * height * 4);
+        for (size_t i = 0; i < specData.size(); i += 4) {
+            specData[i + 0] = 0x291F; // ~0.04f in FP16
+            specData[i + 1] = 0x291F;
+            specData[i + 2] = 0x291F;
+            specData[i + 3] = 0x3C00; // 1.0f
+        }
+        auto result = CreateAndFillTexture(
+            width, height, DXGI_FORMAT_R16G16B16A16_FLOAT,
+            specData.data(), srcPitch,
+            m_synth.specularAlbedoTexture, m_synth.specularUpload);
+        if (!result) return DX12Result::Fail(result.hr, L"Failed to create/fill synthetic specular albedo.");
+    }
+
     m_synth.valid = true;
     OutputDebugStringW(
-        L"[Gaslightr] PipelineSimulator: Synthetic resources allocated.\n");
+        L"[Gaslightr] PipelineSimulator: Synthetic resources (including DLSS-D GBuffer) allocated.\n");
     return DX12Result::Success();
 }
 
@@ -887,6 +935,10 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         inputs.pColorInput      = pInputTexture;
         inputs.pMotionVectors   = m_synth.motionVectors.Get();
         inputs.pDepthBuffer     = m_synth.depthBuffer.Get();
+        inputs.pNormals         = m_synth.normalsTexture.Get();
+        inputs.pRoughness       = m_synth.roughnessTexture.Get();
+        inputs.pDiffuseAlbedo   = pInputTexture;
+        inputs.pSpecularAlbedo  = m_synth.specularAlbedoTexture.Get();
         inputs.MotionVectorScaleX = 1.0f;
         inputs.MotionVectorScaleY = 1.0f;
         // Normalise jitter by resolution (blueprint convention).
@@ -964,6 +1016,10 @@ DX12Result PipelineSimulator::ExecuteFullPipeline(
         inputs.pColorInput      = currentInput;
         inputs.pMotionVectors   = m_synth.motionVectors.Get();
         inputs.pDepthBuffer     = m_synth.depthBuffer.Get();
+        inputs.pNormals         = m_synth.normalsTexture.Get();
+        inputs.pRoughness       = m_synth.roughnessTexture.Get();
+        inputs.pDiffuseAlbedo   = currentInput;
+        inputs.pSpecularAlbedo  = m_synth.specularAlbedoTexture.Get();
         inputs.MotionVectorScaleX = 1.0f;
         inputs.MotionVectorScaleY = 1.0f;
         inputs.CameraJitterX    = jitterX / static_cast<float>(w);
@@ -1020,11 +1076,17 @@ void PipelineSimulator::ReleaseSyntheticResources()
     m_synth.depthBuffer.Reset();
     m_synth.motionVectors.Reset();
     m_synth.exposureTexture.Reset();
+    m_synth.normalsTexture.Reset();
+    m_synth.roughnessTexture.Reset();
+    m_synth.specularAlbedoTexture.Reset();
     m_synth.pingTexture.Reset();
     m_synth.pongTexture.Reset();
     m_synth.depthUpload.Reset();
     m_synth.motionUpload.Reset();
     m_synth.exposureUpload.Reset();
+    m_synth.normalsUpload.Reset();
+    m_synth.roughnessUpload.Reset();
+    m_synth.specularUpload.Reset();
 
     m_synth.width  = 0;
     m_synth.height = 0;

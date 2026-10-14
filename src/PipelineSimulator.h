@@ -63,18 +63,26 @@ struct SimulatorConfig {
 //  Pre-allocated GPU textures that remain resident across the entire
 //  warmup + multi-pass loop.  Allocated once per tile resolution.
 struct SyntheticResources {
-    Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;       // R32_FLOAT, 1.0f
-    Microsoft::WRL::ComPtr<ID3D12Resource> motionVectors;     // R16G16_FLOAT
-    Microsoft::WRL::ComPtr<ID3D12Resource> exposureTexture;   // 1×1 R16_FLOAT
+    Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;           // R32_FLOAT, 1.0f
+    Microsoft::WRL::ComPtr<ID3D12Resource> motionVectors;         // R16G16_FLOAT
+    Microsoft::WRL::ComPtr<ID3D12Resource> exposureTexture;       // 1×1 R16_FLOAT
+
+    // Synthetic GBuffer textures for DLSS 3.5+ Ray Reconstruction (DLSS-D)
+    Microsoft::WRL::ComPtr<ID3D12Resource> normalsTexture;       // R16G16B16A16_FLOAT, (0, 0, 1, 0)
+    Microsoft::WRL::ComPtr<ID3D12Resource> roughnessTexture;     // R16G16B16A16_FLOAT, 0.5f neutral
+    Microsoft::WRL::ComPtr<ID3D12Resource> specularAlbedoTexture;// R16G16B16A16_FLOAT, 0.04 dielectric
 
     // Ping-pong output textures for multi-pass.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pingTexture;       // R16G16B16A16_FLOAT
-    Microsoft::WRL::ComPtr<ID3D12Resource> pongTexture;       // R16G16B16A16_FLOAT
+    Microsoft::WRL::ComPtr<ID3D12Resource> pingTexture;           // R16G16B16A16_FLOAT
+    Microsoft::WRL::ComPtr<ID3D12Resource> pongTexture;           // R16G16B16A16_FLOAT
 
     // Upload staging buffers for initial fill operations.
     Microsoft::WRL::ComPtr<ID3D12Resource> depthUpload;
     Microsoft::WRL::ComPtr<ID3D12Resource> motionUpload;
     Microsoft::WRL::ComPtr<ID3D12Resource> exposureUpload;
+    Microsoft::WRL::ComPtr<ID3D12Resource> normalsUpload;
+    Microsoft::WRL::ComPtr<ID3D12Resource> roughnessUpload;
+    Microsoft::WRL::ComPtr<ID3D12Resource> specularUpload;
 
     uint32_t width  = 0;
     uint32_t height = 0;

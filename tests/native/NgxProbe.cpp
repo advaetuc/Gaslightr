@@ -1010,7 +1010,7 @@ int main() {
                         "1.0",
                         snippetDir.c_str(),
                         device.Get(),
-                        0x13,
+                        0x14,
                         &commonInfo,
                         &threw,
                         &exc
@@ -1074,24 +1074,34 @@ int main() {
                                 ComPtr<ID3D12Resource> pOutput1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                                 ComPtr<ID3D12Resource> pDepth512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                                 ComPtr<ID3D12Resource> pMVec512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pNormals512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pRoughness512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pDiffuseAlbedo512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pSpecularAlbedo512 = CreateProbeTexture(device.Get(), 512, 512, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
                                 ComPtr<ID3D12Resource> pColor1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                                 ComPtr<ID3D12Resource> pDepth1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                                 ComPtr<ID3D12Resource> pMVec1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pNormals1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pRoughness1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pDiffuseAlbedo1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                                ComPtr<ID3D12Resource> pSpecularAlbedo1024 = CreateProbeTexture(device.Get(), 1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
                                 std::cout << "      [Resources] Color512=" << pColor512.Get()
                                           << ", Output1024=" << pOutput1024.Get()
                                           << ", Depth512=" << pDepth512.Get()
-                                          << ", MVec512=" << pMVec512.Get() << "\n";
+                                          << ", MVec512=" << pMVec512.Get()
+                                          << ", Normals512=" << pNormals512.Get()
+                                          << ", Normals1024=" << pNormals1024.Get() << "\n";
 
                                 ComPtr<ID3D12CommandAllocator> cmdAlloc;
                                 hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
                                 ComPtr<ID3D12GraphicsCommandList> cmdList;
                                 hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
 
-                                // 1. Probe Feature 1 (SuperSampling / DLSS) Creation & Evaluation
+                                // 1. Probe Feature 1 (SuperSampling / DLSS + DLSS-D Ray Reconstruction) Creation & Evaluation
                                 if (pfnLoaderCreateFeature) {
-                                    std::cout << "\n      --- Probing Feature 1 (SuperSampling / DLSS) Creation ---\n";
+                                    std::cout << "\n      --- Probing Feature 1 (SuperSampling / DLSS-D Ray Reconstruction) Creation ---\n";
                                     pAppParams->Reset();
                                     pAppParams->Set("Width", 512u);
                                     pAppParams->Set("Height", 512u);
@@ -1100,10 +1110,20 @@ int main() {
                                     pAppParams->Set("PerfQualityValue", 2u); // MaxQuality
                                     pAppParams->Set("RTXValue", 1u);
                                     pAppParams->Set("Reset", 1u);
+                                    pAppParams->Set("DLSS.Feature.Create.Flags", 0u);
+                                    pAppParams->Set("DLSS.Denoise.Mode", 1u); // DLUnified Ray Reconstruction mode
+                                    pAppParams->Set("DLSS.Roughness.Mode", 0u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Width", 512u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Height", 512u);
+
                                     if (pColor512) pAppParams->Set("Color", pColor512.Get());
                                     if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
                                     if (pDepth512) pAppParams->Set("Depth", pDepth512.Get());
                                     if (pMVec512) pAppParams->Set("MotionVectors", pMVec512.Get());
+                                    if (pNormals512) pAppParams->Set("DLSS.Input.Normals", pNormals512.Get());
+                                    if (pRoughness512) pAppParams->Set("DLSS.Input.Roughness", pRoughness512.Get());
+                                    if (pDiffuseAlbedo512) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo512.Get());
+                                    if (pSpecularAlbedo512) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo512.Get());
 
                                     void* pFeatureHandleSS = nullptr;
                                     bool createThrew = false;
@@ -1119,18 +1139,23 @@ int main() {
                                     );
 
                                     if (createThrew) {
-                                        std::cout << "      [!] CreateFeature (SuperSampling) SEH Exception: 0x" << std::hex << createExc << std::dec << "\n";
+                                        std::cout << "      [!] CreateFeature (SuperSampling/DLSS-D) SEH Exception: 0x" << std::hex << createExc << std::dec << "\n";
                                     } else {
-                                        std::cout << "      [+] CreateFeature (SuperSampling): 0x" << std::hex << cResSS << std::dec
+                                        std::cout << "      [+] CreateFeature (SuperSampling/DLSS-D): 0x" << std::hex << cResSS << std::dec
                                                   << " (" << GetNgxResultString(cResSS) << ", Handle=" << pFeatureHandleSS << ")\n";
                                         if (cResSS == 1 && pFeatureHandleSS) {
-                                            std::cout << "      [SUCCESS] DLSS SuperSampling feature handle created!\n";
+                                            std::cout << "      [SUCCESS] DLSS SuperSampling (DLSS-D Ray Reconstruction) feature handle created!\n";
                                             if (pfnLoaderEvaluateFeature) {
-                                                std::cout << "      Attempting NVSDK_NGX_D3D12_EvaluateFeature on SuperSampling...\n";
+                                                std::cout << "      Attempting NVSDK_NGX_D3D12_EvaluateFeature on SuperSampling/DLSS-D...\n";
                                                 if (pColor512) pAppParams->Set("Color", pColor512.Get());
                                                 if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
                                                 if (pDepth512) pAppParams->Set("Depth", pDepth512.Get());
                                                 if (pMVec512) pAppParams->Set("MotionVectors", pMVec512.Get());
+                                                if (pNormals512) pAppParams->Set("DLSS.Input.Normals", pNormals512.Get());
+                                                if (pRoughness512) pAppParams->Set("DLSS.Input.Roughness", pRoughness512.Get());
+                                                if (pDiffuseAlbedo512) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo512.Get());
+                                                if (pSpecularAlbedo512) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo512.Get());
+
                                                 pAppParams->Set("Jitter.Offset.X", 0.0f);
                                                 pAppParams->Set("Jitter.Offset.Y", 0.0f);
                                                 pAppParams->Set("Sharpness", 0.0f);
@@ -1155,6 +1180,8 @@ int main() {
                                                 std::cout << "          Depth:           res=0x" << std::hex << pAppParams->Get("Depth", &pResTest) << ", ptr=" << pResTest << std::dec << "\n";
                                                 pResTest = nullptr;
                                                 std::cout << "          MotionVectors:   res=0x" << std::hex << pAppParams->Get("MotionVectors", &pResTest) << ", ptr=" << pResTest << std::dec << "\n";
+                                                pResTest = nullptr;
+                                                std::cout << "          Normals:         res=0x" << std::hex << pAppParams->Get("DLSS.Input.Normals", &pResTest) << ", ptr=" << pResTest << std::dec << "\n";
                                                 std::cout << "          Jitter.Offset.X: res=0x" << std::hex << pAppParams->Get("Jitter.Offset.X", &fValTest) << ", val=" << fValTest << std::dec << "\n";
                                                 std::cout << "          Jitter.Offset.Y: res=0x" << std::hex << pAppParams->Get("Jitter.Offset.Y", &fValTest) << ", val=" << fValTest << std::dec << "\n";
                                                 std::cout << "          MV.Scale.X:      res=0x" << std::hex << pAppParams->Get("MV.Scale.X", &fValTest) << ", val=" << fValTest << std::dec << "\n";
@@ -1191,14 +1218,136 @@ int main() {
                                             }
                                         }
                                     }
+
+                                    // 1B. Probe Feature 1 in DLAA Native Mode (1024x1024 -> 1024x1024) with DLSS-D Ray Reconstruction
+                                    std::cout << "\n      --- Probing Feature 1 in DLAA Mode (1024x1024 Native DLSS-D Ray Reconstruction) ---\n";
+                                    pAppParams->Reset();
+                                    pAppParams->Set("Width", 1024u);
+                                    pAppParams->Set("Height", 1024u);
+                                    pAppParams->Set("OutWidth", 1024u);
+                                    pAppParams->Set("OutHeight", 1024u);
+                                    pAppParams->Set("PerfQualityValue", 5u); // DLAA mode (1:1 reconstruction)
+                                    pAppParams->Set("RTXValue", 1u);
+                                    pAppParams->Set("Reset", 1u);
+                                    pAppParams->Set("DLSS.Feature.Create.Flags", 0u);
+                                    pAppParams->Set("DLSS.Denoise.Mode", 1u); // DLUnified Ray Reconstruction mode
+                                    pAppParams->Set("DLSS.Roughness.Mode", 0u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Width", 1024u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Height", 1024u);
+
+                                    if (pColor1024) pAppParams->Set("Color", pColor1024.Get());
+                                    if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
+                                    if (pDepth1024) pAppParams->Set("Depth", pDepth1024.Get());
+                                    if (pMVec1024) pAppParams->Set("MotionVectors", pMVec1024.Get());
+                                    if (pNormals1024) pAppParams->Set("DLSS.Input.Normals", pNormals1024.Get());
+                                    if (pRoughness1024) pAppParams->Set("DLSS.Input.Roughness", pRoughness1024.Get());
+                                    if (pDiffuseAlbedo1024) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo1024.Get());
+                                    if (pSpecularAlbedo1024) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo1024.Get());
+
+                                    void* pFeatureHandleDLAA = nullptr;
+                                    bool createThrewDLAA = false;
+                                    DWORD createExcDLAA = 0;
+                                    NVSDK_NGX_Result cResDLAA = SafeCallCreateFeature(
+                                        pfnLoaderCreateFeature,
+                                        cmdList.Get(),
+                                        NVSDK_NGX_Feature_SuperSampling,
+                                        pAppParams,
+                                        &pFeatureHandleDLAA,
+                                        &createThrewDLAA,
+                                        &createExcDLAA
+                                    );
+
+                                    if (createThrewDLAA) {
+                                        std::cout << "      [!] CreateFeature (DLAA/DLSS-D) SEH Exception: 0x" << std::hex << createExcDLAA << std::dec << "\n";
+                                    } else {
+                                        std::cout << "      [+] CreateFeature (DLAA/DLSS-D): 0x" << std::hex << cResDLAA << std::dec
+                                                  << " (" << GetNgxResultString(cResDLAA) << ", Handle=" << pFeatureHandleDLAA << ")\n";
+                                        if (cResDLAA == 1 && pFeatureHandleDLAA) {
+                                            std::cout << "      [SUCCESS] DLAA DLSS-D Ray Reconstruction feature handle created!\n";
+                                            if (pfnLoaderEvaluateFeature) {
+                                                std::cout << "      Attempting NVSDK_NGX_D3D12_EvaluateFeature on DLAA/DLSS-D...\n";
+                                                if (pColor1024) pAppParams->Set("Color", pColor1024.Get());
+                                                if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
+                                                if (pDepth1024) pAppParams->Set("Depth", pDepth1024.Get());
+                                                if (pMVec1024) pAppParams->Set("MotionVectors", pMVec1024.Get());
+                                                if (pNormals1024) pAppParams->Set("DLSS.Input.Normals", pNormals1024.Get());
+                                                if (pRoughness1024) pAppParams->Set("DLSS.Input.Roughness", pRoughness1024.Get());
+                                                if (pDiffuseAlbedo1024) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo1024.Get());
+                                                if (pSpecularAlbedo1024) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo1024.Get());
+
+                                                pAppParams->Set("Jitter.Offset.X", 0.0f);
+                                                pAppParams->Set("Jitter.Offset.Y", 0.0f);
+                                                pAppParams->Set("Sharpness", 0.0f);
+                                                pAppParams->Set("Reset", 1);
+                                                pAppParams->Set("MV.Scale.X", 1.0f);
+                                                pAppParams->Set("MV.Scale.Y", 1.0f);
+                                                pAppParams->Set("MV.Offset.X", 0.0f);
+                                                pAppParams->Set("MV.Offset.Y", 0.0f);
+                                                pAppParams->Set("RenderSubrectDimensionsWidth", 1024u);
+                                                pAppParams->Set("RenderSubrectDimensionsHeight", 1024u);
+                                                pAppParams->Set("PreExposure", 1.0f);
+                                                pAppParams->Set("ExposureScale", 1.0f);
+
+                                                bool evalThrew = false;
+                                                DWORD evalExc = 0;
+                                                NVSDK_NGX_Result eRes = SafeCallEvaluateFeature(
+                                                    pfnLoaderEvaluateFeature,
+                                                    cmdList.Get(),
+                                                    pFeatureHandleDLAA,
+                                                    pAppParams,
+                                                    nullptr,
+                                                    &evalThrew,
+                                                    &evalExc
+                                                );
+                                                if (evalThrew) {
+                                                    std::cout << "        [!] EvaluateFeature (DLAA/DLSS-D) SEH Exception: 0x" << std::hex << evalExc << std::dec << "\n";
+                                                } else {
+                                                    std::cout << "        [+] EvaluateFeature (DLAA/DLSS-D) Return: 0x" << std::hex << eRes << std::dec
+                                                              << " (" << GetNgxResultString(eRes) << ")\n";
+                                                }
+                                            }
+                                            if (pfnLoaderReleaseFeature) {
+                                                bool relThrew = false;
+                                                DWORD relExc = 0;
+                                                SafeCallReleaseFeature(pfnLoaderReleaseFeature, pFeatureHandleDLAA, &relThrew, &relExc);
+                                                std::cout << "      [+] DLAA/DLSS-D feature released.\n";
+                                            }
+                                        }
+                                    }
                                 }
 
-                                // 2. Probe Feature 18 (RayReconstruction / DLSS-NR) Creation & Evaluation
+                                // 2. Probe Feature 13 (RayReconstruction / DLSS-NR) Creation & Evaluation
                                 if (pfnLoaderCreateFeature) {
                                     std::cout << "\n      --- Probing Feature 13 (RayReconstruction / DLSS-NR) Creation ---\n";
                                     pAppParams->Reset();
                                     pAppParams->Set("Width", 1024u);
                                     pAppParams->Set("Height", 1024u);
+                                    pAppParams->Set("OutWidth", 1024u);
+                                    pAppParams->Set("OutHeight", 1024u);
+                                    pAppParams->Set("TargetWidth", 1024u);
+                                    pAppParams->Set("TargetHeight", 1024u);
+                                    pAppParams->Set("PerfQualityValue", 2u); // MaxQuality
+                                    pAppParams->Set("RTXValue", 1u);
+                                    pAppParams->Set("Reset", 1u);
+                                    pAppParams->Set("DLSS.Feature.Create.Flags", 0u);
+                                    pAppParams->Set("DLSS.Denoise.Mode", 0u);
+                                    pAppParams->Set("DLSS.Roughness.Mode", 0u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Width", 1024u);
+                                    pAppParams->Set("DLSS.Render.Subrect.Dimensions.Height", 1024u);
+
+                                    // Primary textures
+                                    if (pColor1024) pAppParams->Set("Color", pColor1024.Get());
+                                    if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
+                                    if (pDepth1024) pAppParams->Set("Depth", pDepth1024.Get());
+                                    if (pMVec1024) pAppParams->Set("MotionVectors", pMVec1024.Get());
+
+                                    // DLSS-D Ray Reconstruction GBuffer textures
+                                    if (pNormals1024) pAppParams->Set("DLSS.Input.Normals", pNormals1024.Get());
+                                    if (pRoughness1024) pAppParams->Set("DLSS.Input.Roughness", pRoughness1024.Get());
+                                    if (pDiffuseAlbedo1024) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo1024.Get());
+                                    if (pSpecularAlbedo1024) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo1024.Get());
+
+                                    // DLSSNR dual-contract aliases
                                     pAppParams->Set("DLSSNR.Width", 1024u);
                                     pAppParams->Set("DLSSNR.Height", 1024u);
                                     pAppParams->Set("DLSSNR.Intensity", 1.0f);
@@ -1212,23 +1361,10 @@ int main() {
                                     pAppParams->Set("DLSSNR.UseAutoMask", 1);
                                     pAppParams->Set("DLSSNR.Enabled", 1);
                                     pAppParams->Set("DLSSNR.Reset", 1u);
-                                    pAppParams->Set("Reset", 1u);
-                                    if (pColor1024) {
-                                        pAppParams->Set("Color", pColor1024.Get());
-                                        pAppParams->Set("DLSSNR.Color", pColor1024.Get());
-                                    }
-                                    if (pOutput1024) {
-                                        pAppParams->Set("Output", pOutput1024.Get());
-                                        pAppParams->Set("DLSSNR.Output", pOutput1024.Get());
-                                    }
-                                    if (pDepth1024) {
-                                        pAppParams->Set("Depth", pDepth1024.Get());
-                                        pAppParams->Set("DLSSNR.Depth", pDepth1024.Get());
-                                    }
-                                    if (pMVec1024) {
-                                        pAppParams->Set("MotionVectors", pMVec1024.Get());
-                                        pAppParams->Set("DLSSNR.MVec", pMVec1024.Get());
-                                    }
+                                    if (pColor1024) pAppParams->Set("DLSSNR.Color", pColor1024.Get());
+                                    if (pOutput1024) pAppParams->Set("DLSSNR.Output", pOutput1024.Get());
+                                    if (pDepth1024) pAppParams->Set("DLSSNR.Depth", pDepth1024.Get());
+                                    if (pMVec1024) pAppParams->Set("DLSSNR.MVec", pMVec1024.Get());
 
                                     void* pFeatureHandleNR = nullptr;
                                     bool createThrew = false;
@@ -1251,22 +1387,26 @@ int main() {
                                         if (cResNR == 1 && pFeatureHandleNR) {
                                             std::cout << "      [SUCCESS] DLSS-NR RayReconstruction feature handle created!\n";
                                             if (pfnLoaderEvaluateFeature) {
-                                                if (pColor1024) {
-                                                    pAppParams->Set("Color", pColor1024.Get());
-                                                    pAppParams->Set("DLSSNR.Color", pColor1024.Get());
-                                                }
-                                                if (pOutput1024) {
-                                                    pAppParams->Set("Output", pOutput1024.Get());
-                                                    pAppParams->Set("DLSSNR.Output", pOutput1024.Get());
-                                                }
-                                                if (pDepth1024) {
-                                                    pAppParams->Set("Depth", pDepth1024.Get());
-                                                    pAppParams->Set("DLSSNR.Depth", pDepth1024.Get());
-                                                }
-                                                if (pMVec1024) {
-                                                    pAppParams->Set("MotionVectors", pMVec1024.Get());
-                                                    pAppParams->Set("DLSSNR.MVec", pMVec1024.Get());
-                                                }
+                                                if (pColor1024) pAppParams->Set("Color", pColor1024.Get());
+                                                if (pOutput1024) pAppParams->Set("Output", pOutput1024.Get());
+                                                if (pDepth1024) pAppParams->Set("Depth", pDepth1024.Get());
+                                                if (pMVec1024) pAppParams->Set("MotionVectors", pMVec1024.Get());
+                                                if (pNormals1024) pAppParams->Set("DLSS.Input.Normals", pNormals1024.Get());
+                                                if (pRoughness1024) pAppParams->Set("DLSS.Input.Roughness", pRoughness1024.Get());
+                                                if (pDiffuseAlbedo1024) pAppParams->Set("DLSS.Input.DiffuseAlbedo", pDiffuseAlbedo1024.Get());
+                                                if (pSpecularAlbedo1024) pAppParams->Set("DLSS.Input.SpecularAlbedo", pSpecularAlbedo1024.Get());
+
+                                                pAppParams->Set("Jitter.Offset.X", 0.0f);
+                                                pAppParams->Set("Jitter.Offset.Y", 0.0f);
+                                                pAppParams->Set("Sharpness", 0.0f);
+                                                pAppParams->Set("Reset", 1);
+                                                pAppParams->Set("MV.Scale.X", 1.0f);
+                                                pAppParams->Set("MV.Scale.Y", 1.0f);
+                                                pAppParams->Set("RenderSubrectDimensionsWidth", 1024u);
+                                                pAppParams->Set("RenderSubrectDimensionsHeight", 1024u);
+                                                pAppParams->Set("PreExposure", 1.0f);
+                                                pAppParams->Set("ExposureScale", 1.0f);
+
                                                 pAppParams->Set("DLSSNR.Reset", 1);
                                                 pAppParams->Set("DLSSNR.Intensity", 1.0f);
                                                 pAppParams->Set("DLSSNR.LocalStructureStrength", 1.0f);
