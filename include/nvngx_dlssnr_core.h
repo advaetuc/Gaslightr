@@ -52,6 +52,10 @@ struct NVNGX_EvaluationInputs {
     float           CameraJitterY;      // Halton(frame, 3) - 0.5f, normalised
     unsigned int    FrameIndex;         // Monotonic frame counter
     bool            ResetHistory;       // true ONLY on frame 0
+    uint32_t        SubrectOffsetX = 0; // Global canvas X offset for multi-tile UVs
+    uint32_t        SubrectOffsetY = 0; // Global canvas Y offset for multi-tile UVs
+    uint32_t        CanvasWidth    = 0; // Total canvas width
+    uint32_t        CanvasHeight   = 0; // Total canvas height
 };
 
 // ── Function pointer typedefs for dynamic resolution ─────────────────────────

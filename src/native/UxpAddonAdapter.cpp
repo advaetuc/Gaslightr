@@ -137,6 +137,34 @@ addon_value ProcessTile(addon_env env, addon_callback_info info) noexcept {
                 }
             }
         }
+        addon_value tileXVal = Property(env, args[1], "tileX");
+        if (tileXVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, tileXVal, &v) == addon_ok && std::isfinite(v)) {
+                request.tileX = static_cast<int32_t>(v);
+            }
+        }
+        addon_value tileYVal = Property(env, args[1], "tileY");
+        if (tileYVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, tileYVal, &v) == addon_ok && std::isfinite(v)) {
+                request.tileY = static_cast<int32_t>(v);
+            }
+        }
+        addon_value canvasWVal = Property(env, args[1], "canvasWidth");
+        if (canvasWVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, canvasWVal, &v) == addon_ok && std::isfinite(v) && v >= 0) {
+                request.canvasWidth = static_cast<uint32_t>(v);
+            }
+        }
+        addon_value canvasHVal = Property(env, args[1], "canvasHeight");
+        if (canvasHVal) {
+            double v = 0.0;
+            if (UxpAddonApis.uxp_addon_get_value_double(env, canvasHVal, &v) == addon_ok && std::isfinite(v) && v >= 0) {
+                request.canvasHeight = static_cast<uint32_t>(v);
+            }
+        }
         if (!request.width || !request.height) throw std::invalid_argument("Tile dimensions must be 1-2048.");
         const size_t expected = static_cast<size_t>(request.width) * request.height * 4;
 

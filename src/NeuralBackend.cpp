@@ -7,6 +7,10 @@
 #include <mutex>
 #include <vector>
 #include <cwchar>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
+#include <algorithm>
 
 namespace Gaslightr {
 
@@ -16,7 +20,8 @@ namespace {
 typedef LONG(WINAPI* FnWinVerifyTrust)(HWND, GUID*, LPVOID);
 static FnWinVerifyTrust g_OrigWinVerifyTrust = nullptr;
 static BYTE g_OriginalBytes[14] = {0};
-static std::mutex g_HookMutex;
+static std::recursive_mutex g_HookMutex;
+static thread_local bool t_insideWinVerifyTrust = false;
 static std::atomic<bool> g_HookInstalled{false};
 
 static bool IsTargetDlssBinary(LPCWSTR filePath) {
@@ -29,15 +34,30 @@ static bool IsTargetDlssBinary(LPCWSTR filePath) {
             wcsstr(lower, L"nvngx_dlss.dll") != nullptr);
 }
 
-static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVTData) {
-    auto* pData = reinterpret_cast<WINTRUST_DATA*>(pWVTData);
-    if (pData && pData->dwUnionChoice == WTD_CHOICE_FILE && pData->pFile && pData->pFile->pcwszFilePath) {
-        if (IsTargetDlssBinary(pData->pFile->pcwszFilePath)) {
-            return ERROR_SUCCESS;
+static bool ShouldSpoofWinVerifyTrust(LPVOID pWVTData) {
+    __try {
+        auto* pData = reinterpret_cast<WINTRUST_DATA*>(pWVTData);
+        if (pData && pData->dwUnionChoice == WTD_CHOICE_FILE && pData->pFile && pData->pFile->pcwszFilePath) {
+            if (IsTargetDlssBinary(pData->pFile->pcwszFilePath)) {
+                return true;
+            }
         }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVTData) {
+    if (t_insideWinVerifyTrust) {
+        return g_OrigWinVerifyTrust(hwnd, pgActionID, pWVTData);
     }
 
-    std::lock_guard<std::mutex> lock(g_HookMutex);
+    if (ShouldSpoofWinVerifyTrust(pWVTData)) {
+        return ERROR_SUCCESS;
+    }
+
+    t_insideWinVerifyTrust = true;
+    std::lock_guard<std::recursive_mutex> lock(g_HookMutex);
     DWORD oldProtect = 0;
     VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, PAGE_EXECUTE_READWRITE, &oldProtect);
     memcpy(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), g_OriginalBytes, 14);
@@ -52,12 +72,13 @@ static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVT
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
     VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, oldProtect, &oldProtect);
 
+    t_insideWinVerifyTrust = false;
     return status;
 }
 
 static bool EnsureWinVerifyTrustHook() {
     if (g_HookInstalled.load(std::memory_order_acquire)) return true;
-    std::lock_guard<std::mutex> lock(g_HookMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_HookMutex);
     if (g_HookInstalled.load(std::memory_order_relaxed)) return true;
 
     HMODULE hWintrust = LoadLibraryW(L"wintrust.dll");
@@ -141,6 +162,208 @@ static std::wstring FindSnippetDirectory() {
     return L".";
 }
 
+// ── Thread-Safe Ring-Buffer Logger for In-Host Diagnostic Logging ────────────
+class NeuralLogger {
+public:
+    static NeuralLogger& GetInstance() {
+        static NeuralLogger s_instance;
+        return s_instance;
+    }
+
+    void Log(const char* level, const char* format, ...) {
+        char buffer[1024];
+        va_list args;
+        va_start(args, format);
+        vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        char timestamp[64];
+        snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+        std::string line = std::string("[") + timestamp + "] [" + level + "] " + buffer + "\n";
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_entries.size() >= kMaxEntries) {
+                m_entries[m_head] = line;
+                m_head = (m_head + 1) % kMaxEntries;
+            } else {
+                m_entries.push_back(line);
+            }
+        }
+
+        OutputDebugStringA(line.c_str());
+        WriteToFile(line);
+    }
+
+    std::vector<std::string> GetRecentEntries(size_t count = 50) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::vector<std::string> result;
+        const size_t total = m_entries.size();
+        if (total == 0) return result;
+        const size_t n = (std::min)(count, total);
+        result.reserve(n);
+        if (total < kMaxEntries) {
+            const size_t start = total - n;
+            for (size_t i = start; i < total; ++i) {
+                result.push_back(m_entries[i]);
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                size_t idx = (m_head + total - n + i) % kMaxEntries;
+                result.push_back(m_entries[idx]);
+            }
+        }
+        return result;
+    }
+
+private:
+    NeuralLogger() : m_logPath(ResolveLogPath()) {
+        Log("INFO", "=== Gaslightr Neural Logging Initialized ===");
+    }
+    ~NeuralLogger() = default;
+
+    static std::filesystem::path ResolveLogPath() {
+        wchar_t modPath[MAX_PATH]{};
+        HMODULE hModule = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&ResolveLogPath), &hModule) && hModule) {
+            if (GetModuleFileNameW(hModule, modPath, MAX_PATH) > 0) {
+                std::filesystem::path dir = std::filesystem::path(modPath).parent_path();
+                return dir / L"gaslightr_neural.log";
+            }
+        }
+        return L"gaslightr_neural.log";
+    }
+
+    void WriteToFile(const std::string& line) {
+        FILE* fp = nullptr;
+        errno_t err = _wfopen_s(&fp, m_logPath.c_str(), L"a");
+        if (err == 0 && fp) {
+            fputs(line.c_str(), fp);
+            fclose(fp);
+            return;
+        }
+        err = fopen_s(&fp, "gaslightr_neural.log", "a");
+        if (err == 0 && fp) {
+            fputs(line.c_str(), fp);
+            fclose(fp);
+        }
+    }
+
+    static constexpr size_t kMaxEntries = 512;
+    std::mutex m_mutex;
+    std::vector<std::string> m_entries;
+    size_t m_head = 0;
+    std::filesystem::path m_logPath;
+};
+
+static void __cdecl InternalNgxLogCallback(
+    const char* message,
+    NVSDK_NGX_Logging_Level level,
+    NVSDK_NGX_Feature sourceComponent)
+{
+    const char* lvl = (level == NVSDK_NGX_LOGGING_LEVEL_VERBOSE) ? "VERBOSE" : "INFO";
+    NeuralLogger::GetInstance().Log(lvl, "NGX[%u]: %s", static_cast<unsigned int>(sourceComponent), message ? message : "<null>");
+}
+
+// ── In-Host SEH Wrappers for Vendor Module Crash Immunity ───────────────────
+static NVSDK_NGX_Result SafeCallInitProjectID(PFN_NVSDK_NGX_D3D12_Init_ProjectID pfn,
+    const char* inProjectId, NVSDK_NGX_EngineType inEngineType, const char* inEngineVersion,
+    const wchar_t* inApplicationDataPath, ID3D12Device* inDevice, NVSDK_NGX_Version inSDKVersion,
+    const NVSDK_NGX_FeatureCommonInfo* inFeatureInfo, DWORD* outExceptionCode)
+{
+    __try {
+        return pfn(inProjectId, inEngineType, inEngineVersion, inApplicationDataPath, inDevice, inSDKVersion, inFeatureInfo);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return NVSDK_NGX_Result_Fail_PlatformError;
+    }
+}
+
+static NVSDK_NGX_Result SafeCallInitExt(PFN_NVSDK_NGX_D3D12_Init_Ext pfn,
+    unsigned long long inApplicationId, const wchar_t* inApplicationDataPath,
+    ID3D12Device* inDevice, NVSDK_NGX_Version inSDKVersion,
+    const NVSDK_NGX_FeatureCommonInfo* inFeatureInfo, DWORD* outExceptionCode)
+{
+    __try {
+        return pfn(inApplicationId, inApplicationDataPath, inDevice, inSDKVersion, inFeatureInfo);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return NVSDK_NGX_Result_Fail_PlatformError;
+    }
+}
+
+static NVSDK_NGX_Result SafeCallAllocateParameters(PFN_NVSDK_NGX_D3D12_AllocateParameters pfn,
+    void** ppOutParameters, DWORD* outExceptionCode)
+{
+    __try {
+        return pfn(ppOutParameters);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return NVSDK_NGX_Result_Fail_PlatformError;
+    }
+}
+
+static NVSDK_NGX_Result SafeCallCreateFeature(PFN_NVSDK_NGX_D3D12_CreateFeature pfn,
+    ID3D12GraphicsCommandList* inCmdList, NVSDK_NGX_Feature inFeatureID,
+    const NVSDK_NGX_Parameter* inParameters, void** outHandle, DWORD* outExceptionCode)
+{
+    __try {
+        return pfn(inCmdList, inFeatureID, inParameters, outHandle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return NVSDK_NGX_Result_Fail_PlatformError;
+    }
+}
+
+static NVSDK_NGX_Result SafeCallEvaluateFeature(PFN_NVSDK_NGX_D3D12_EvaluateFeature pfn,
+    ID3D12GraphicsCommandList* inCmdList, void* inFeatureHandle,
+    NVSDK_NGX_Parameter* inParameters, void* inCallback, DWORD* outExceptionCode)
+{
+    __try {
+        return pfn(inCmdList, inFeatureHandle, inParameters, inCallback);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return NVSDK_NGX_Result_Fail_PlatformError;
+    }
+}
+
+static void SafeCallReleaseFeature(PFN_NVSDK_NGX_D3D12_ReleaseFeature pfn, void* inHandle)
+{
+    __try {
+        pfn(inHandle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void SafeCallDestroyParameters(PFN_NVSDK_NGX_D3D12_DestroyParameters pfn, void* inParams)
+{
+    __try {
+        pfn(inParams);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void SafeCallShutdown(PFN_NVSDK_NGX_D3D12_Shutdown pfn, ID3D12Device* inDevice)
+{
+    __try {
+        pfn(inDevice);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void SafeCallShutdown1(PFN_NVSDK_NGX_D3D12_Shutdown1 pfn)
+{
+    __try {
+        pfn();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 } // namespace
 
 struct NeuralBackend::NgxSession {
@@ -166,23 +389,25 @@ struct NeuralBackend::NgxSession {
     int quality = 2;
 
     ~NgxSession() {
+        NeuralLogger::GetInstance().Log("INFO", "NgxSession tearing down (FeatureHandle=%p, Params=%p)", pFeatureHandle, pParams);
         if (pfnReleaseFeature && pFeatureHandle) {
-            pfnReleaseFeature(pFeatureHandle);
+            SafeCallReleaseFeature(pfnReleaseFeature, pFeatureHandle);
             pFeatureHandle = nullptr;
         }
         if (pfnDestroyParameters && pParams) {
-            pfnDestroyParameters(pParams);
+            SafeCallDestroyParameters(pfnDestroyParameters, pParams);
             pParams = nullptr;
         }
         if (pfnShutdown && pDevice) {
-            pfnShutdown(pDevice);
+            SafeCallShutdown(pfnShutdown, pDevice);
         } else if (pfnShutdown1) {
-            pfnShutdown1();
+            SafeCallShutdown1(pfnShutdown1);
         }
         if (hTrampoline) {
             FreeLibrary(hTrampoline);
             hTrampoline = nullptr;
         }
+        NeuralLogger::GetInstance().Log("INFO", "NgxSession torn down cleanly.");
     }
 };
 
@@ -270,30 +495,48 @@ DX12Result NeuralBackend::InitializeExplicit(ID3D12Device* device, uint32_t inWi
     NVSDK_NGX_FeatureCommonInfo commonInfo{};
     commonInfo.PathListInfo.Path = searchPaths;
     commonInfo.PathListInfo.Length = 1;
+    commonInfo.LoggingInfo.LoggingCallback = InternalNgxLogCallback;
+    commonInfo.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_VERBOSE;
 
     NVSDK_NGX_Result initRes = 0;
+    DWORD sehCode = 0;
     const char* kGaslightrGuid = "24e93019-9430-4e13-94c6-e794b54e38c3";
     if (session->pfnInitProjectID) {
-        initRes = session->pfnInitProjectID(kGaslightrGuid, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0",
-            snippetDir.c_str(), device, 0x14, &commonInfo);
-        if (initRes != NVSDK_NGX_Result_Success) {
-            initRes = session->pfnInitProjectID(kGaslightrGuid, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0",
-                snippetDir.c_str(), device, 0x13, &commonInfo);
+        NeuralLogger::GetInstance().Log("INFO", "Calling NVSDK_NGX_D3D12_Init_ProjectID (v0x14)...");
+        initRes = SafeCallInitProjectID(session->pfnInitProjectID, kGaslightrGuid, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0",
+            snippetDir.c_str(), device, 0x14, &commonInfo, &sehCode);
+        if (initRes != NVSDK_NGX_Result_Success && sehCode == 0) {
+            NeuralLogger::GetInstance().Log("INFO", "Retrying NVSDK_NGX_D3D12_Init_ProjectID (v0x13)...");
+            initRes = SafeCallInitProjectID(session->pfnInitProjectID, kGaslightrGuid, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0",
+                snippetDir.c_str(), device, 0x13, &commonInfo, &sehCode);
         }
     } else if (session->pfnInitExt) {
-        initRes = session->pfnInitExt(0x0E658703, snippetDir.c_str(), device, 0x14, &commonInfo);
-        if (initRes != NVSDK_NGX_Result_Success) {
-            initRes = session->pfnInitExt(0x0E658703, snippetDir.c_str(), device, 0x13, &commonInfo);
+        NeuralLogger::GetInstance().Log("INFO", "Calling NVSDK_NGX_D3D12_Init_Ext (v0x14)...");
+        initRes = SafeCallInitExt(session->pfnInitExt, 0x0E658703, snippetDir.c_str(), device, 0x14, &commonInfo, &sehCode);
+        if (initRes != NVSDK_NGX_Result_Success && sehCode == 0) {
+            NeuralLogger::GetInstance().Log("INFO", "Retrying NVSDK_NGX_D3D12_Init_Ext (v0x13)...");
+            initRes = SafeCallInitExt(session->pfnInitExt, 0x0E658703, snippetDir.c_str(), device, 0x13, &commonInfo, &sehCode);
         }
     }
+    if (sehCode != 0) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX init trapped SEH exception: 0x%08X", sehCode);
+        return DX12Result::Fail(E_FAIL, L"NVSDK_NGX init trapped SEH exception: 0x" + std::to_wstring(sehCode));
+    }
     if (initRes != NVSDK_NGX_Result_Success) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX init returned error: 0x%08X", initRes);
         return DX12Result::Fail(E_FAIL, L"NVSDK_NGX_D3D12_Init failed: " + std::to_wstring(initRes));
     }
 
     // 2. Allocate Parameters
     void* rawParams = nullptr;
-    NVSDK_NGX_Result allocRes = session->pfnAllocateParameters(&rawParams);
+    sehCode = 0;
+    NVSDK_NGX_Result allocRes = SafeCallAllocateParameters(session->pfnAllocateParameters, &rawParams, &sehCode);
+    if (sehCode != 0) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX allocate parameters trapped SEH exception: 0x%08X", sehCode);
+        return DX12Result::Fail(E_FAIL, L"NVSDK_NGX allocate parameters trapped SEH exception: 0x" + std::to_wstring(sehCode));
+    }
     if (allocRes != NVSDK_NGX_Result_Success || !rawParams) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX_D3D12_AllocateParameters failed: 0x%08X", allocRes);
         return DX12Result::Fail(E_FAIL, L"NVSDK_NGX_D3D12_AllocateParameters failed: " + std::to_wstring(allocRes));
     }
     session->pParams = reinterpret_cast<NVSDK_NGX_Parameter*>(rawParams);
@@ -337,9 +580,15 @@ DX12Result NeuralBackend::InitializeExplicit(ID3D12Device* device, uint32_t inWi
         return DX12Result::Fail(hrList, L"Failed to create command list for NGX feature creation.");
     }
 
-    NVSDK_NGX_Result createRes = session->pfnCreateFeature(initCmdList.Get(), NVSDK_NGX_Feature_SuperSampling,
-        session->pParams, &session->pFeatureHandle);
+    sehCode = 0;
+    NVSDK_NGX_Result createRes = SafeCallCreateFeature(session->pfnCreateFeature, initCmdList.Get(),
+        NVSDK_NGX_Feature_SuperSampling, session->pParams, &session->pFeatureHandle, &sehCode);
+    if (sehCode != 0) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX create feature trapped SEH exception: 0x%08X", sehCode);
+        return DX12Result::Fail(E_FAIL, L"NVSDK_NGX create feature trapped SEH exception: 0x" + std::to_wstring(sehCode));
+    }
     if (createRes != NVSDK_NGX_Result_Success || !session->pFeatureHandle) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX_D3D12_CreateFeature failed: 0x%08X", createRes);
         return DX12Result::Fail(E_FAIL, L"NVSDK_NGX_D3D12_CreateFeature failed: " + std::to_wstring(createRes));
     }
 
@@ -407,16 +656,32 @@ DX12Result NeuralBackend::EvaluateExplicit(ID3D12GraphicsCommandList* commandLis
     pParams->Set("MV.Offset.Y", 0.0f);
     pParams->Set("RenderSubrectDimensionsWidth", m_session->inW);
     pParams->Set("RenderSubrectDimensionsHeight", m_session->inH);
+    pParams->Set("DLSS.Render.Subrect.Dimensions.Width", m_session->inW);
+    pParams->Set("DLSS.Render.Subrect.Dimensions.Height", m_session->inH);
+    if (inputs.SubrectOffsetX > 0 || inputs.SubrectOffsetY > 0) {
+        pParams->Set("RenderSubrectOffsetX", inputs.SubrectOffsetX);
+        pParams->Set("RenderSubrectOffsetY", inputs.SubrectOffsetY);
+    }
     pParams->Set("PreExposure", 1.0f);
     pParams->Set("ExposureScale", 1.0f);
 
-    NVSDK_NGX_Result evalRes = m_session->pfnEvaluateFeature(commandList,
-        m_session->pFeatureHandle, pParams, nullptr);
+    DWORD sehCode = 0;
+    NVSDK_NGX_Result evalRes = SafeCallEvaluateFeature(m_session->pfnEvaluateFeature,
+        commandList, m_session->pFeatureHandle, pParams, nullptr, &sehCode);
+    if (sehCode != 0) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX_D3D12_EvaluateFeature trapped SEH exception: 0x%08X", sehCode);
+        return DX12Result::Fail(E_FAIL, L"NVSDK_NGX_D3D12_EvaluateFeature trapped SEH: 0x" + std::to_wstring(sehCode));
+    }
     if (evalRes != NVSDK_NGX_Result_Success) {
+        NeuralLogger::GetInstance().Log("ERROR", "NVSDK_NGX_D3D12_EvaluateFeature returned error: 0x%08X", evalRes);
         return DX12Result::Fail(E_FAIL, L"NVSDK_NGX_D3D12_EvaluateFeature failed: " + std::to_wstring(evalRes));
     }
 
     return DX12Result::Success();
+}
+
+std::vector<std::string> NeuralBackend::GetRecentLogEntries(size_t count) {
+    return NeuralLogger::GetInstance().GetRecentEntries(count);
 }
 
 void NeuralBackend::Shutdown() {

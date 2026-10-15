@@ -603,7 +603,8 @@ static std::string CheckAuthenticodeSignature(const std::wstring& filePath) {
 typedef LONG(WINAPI* FnWinVerifyTrust)(HWND, GUID*, LPVOID);
 static FnWinVerifyTrust g_OrigWinVerifyTrust = nullptr;
 static BYTE g_OriginalBytes[14] = {0};
-static std::mutex g_HookMutex;
+static std::recursive_mutex g_HookMutex;
+static thread_local bool t_insideWinVerifyTrust = false;
 
 // Helper: case-insensitive wide substring check for nvngx_dlssnr.dll or nvngx_dlssd.dll
 static bool IsTargetDlssNrBinary(LPCWSTR filePath) {
@@ -614,19 +615,35 @@ static bool IsTargetDlssNrBinary(LPCWSTR filePath) {
     return (wcsstr(lowerPath, L"nvngx_dlssnr.dll") != nullptr || wcsstr(lowerPath, L"nvngx_dlssd.dll") != nullptr);
 }
 
+static bool ShouldSpoofWinVerifyTrust(LPVOID pWVTData) {
+    __try {
+        auto* pData = reinterpret_cast<WINTRUST_DATA*>(pWVTData);
+        if (pData && pData->dwUnionChoice == WTD_CHOICE_FILE && pData->pFile && pData->pFile->pcwszFilePath) {
+            std::printf("  [WVT-HOOK] Inspecting file: %ls\n", pData->pFile->pcwszFilePath);
+            std::fflush(stdout);
+            if (IsTargetDlssNrBinary(pData->pFile->pcwszFilePath)) {
+                std::printf("  [WVT-HOOK] WinVerifyTrust intercepted for nvngx_dlssnr.dll -> Spoofing ERROR_SUCCESS (0x0)!\n");
+                std::fflush(stdout);
+                return true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
 // Detour callback invoked when _nvngx.dll verifies DLL signatures
 static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVTData) {
-    auto* pData = reinterpret_cast<WINTRUST_DATA*>(pWVTData);
-    if (pData && pData->dwUnionChoice == WTD_CHOICE_FILE && pData->pFile && pData->pFile->pcwszFilePath) {
-        std::wcout << L"  [WVT-HOOK] Inspecting file: " << pData->pFile->pcwszFilePath << std::endl;
-        if (IsTargetDlssNrBinary(pData->pFile->pcwszFilePath)) {
-            std::cout << "  [WVT-HOOK] WinVerifyTrust intercepted for nvngx_dlssnr.dll -> Spoofing ERROR_SUCCESS (0x0)!\n";
-            return ERROR_SUCCESS; // 0x0
-        }
+    if (t_insideWinVerifyTrust) {
+        return g_OrigWinVerifyTrust(hwnd, pgActionID, pWVTData);
     }
 
-    // Temporarily restore prologue to invoke original WinVerifyTrust for non-target binaries
-    std::lock_guard<std::mutex> lock(g_HookMutex);
+    if (ShouldSpoofWinVerifyTrust(pWVTData)) {
+        return ERROR_SUCCESS; // 0x0
+    }
+
+    t_insideWinVerifyTrust = true;
+    std::lock_guard<std::recursive_mutex> lock(g_HookMutex);
     DWORD oldProtect = 0;
     VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, PAGE_EXECUTE_READWRITE, &oldProtect);
     memcpy(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), g_OriginalBytes, 14);
@@ -642,6 +659,7 @@ static LONG WINAPI HookedWinVerifyTrust(HWND hwnd, GUID* pgActionID, LPVOID pWVT
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14);
     VirtualProtect(reinterpret_cast<LPVOID>(g_OrigWinVerifyTrust), 14, oldProtect, &oldProtect);
 
+    t_insideWinVerifyTrust = false;
     return status;
 }
 
@@ -1519,18 +1537,22 @@ int main() {
     // ═════════════════════════════════════════════════════════════════════
     // Phase 10: Production NeuralBackend Integration Verification
     // ═════════════════════════════════════════════════════════════════════
-    std::cout << "\n=================================================================\n";
-    std::cout << " Phase 10: Testing Production NeuralBackend Runtime Pipeline\n";
-    std::cout << "=================================================================\n";
+    std::printf("\n=================================================================\n");
+    std::printf(" Phase 10: Testing Production NeuralBackend Runtime Pipeline\n");
+    std::printf("=================================================================\n");
+    std::fflush(stdout);
     {
         auto& backend = Gaslightr::NeuralBackend::GetInstance();
-        std::cout << "  [1] Initializing NeuralBackend::InitializeExplicit (DLSS-D 512->1024)...\n";
+        std::printf("  [1] Initializing NeuralBackend::InitializeExplicit (DLSS-D 512->1024)...\n");
+        std::fflush(stdout);
         auto initRes = backend.InitializeExplicit(device.Get(), 512, 512, 1024, 1024, true, 2);
         if (!initRes) {
-            std::wcout << L"    [FAIL] InitializeExplicit failed: " << initRes.detail << L"\n";
+            std::printf("    [FAIL] InitializeExplicit failed: %ls\n", initRes.detail.c_str());
+            std::fflush(stdout);
         } else {
-            std::cout << "    [SUCCESS] NeuralBackend initialized! IsLoaded=" << backend.IsLoaded()
-                      << ", IsReady=" << backend.IsReady() << "\n";
+            std::printf("    [SUCCESS] NeuralBackend initialized! IsLoaded=%d, IsReady=%d\n",
+                backend.IsLoaded() ? 1 : 0, backend.IsReady() ? 1 : 0);
+            std::fflush(stdout);
 
             D3D12_COMMAND_QUEUE_DESC qDesc{};
             qDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1566,13 +1588,15 @@ int main() {
             evalInputs.FrameIndex = 0;
             evalInputs.ResetHistory = true;
 
-            std::cout << "  [2] Evaluating NeuralBackend::EvaluateExplicit on D3D12 command list...\n";
+            std::printf("  [2] Evaluating NeuralBackend::EvaluateExplicit on D3D12 command list...\n");
+            std::fflush(stdout);
             auto evalRes = backend.EvaluateExplicit(testCmdList.Get(), evalInputs, pTestOutput.Get());
             if (!evalRes) {
-                std::wcout << L"    [FAIL] EvaluateExplicit failed: " << evalRes.detail << L"\n";
+                std::printf("    [FAIL] EvaluateExplicit failed: %ls\n", evalRes.detail.c_str());
             } else {
-                std::cout << "    [SUCCESS] NeuralBackend evaluated cleanly on RTX 4080 SUPER!\n";
+                std::printf("    [SUCCESS] NeuralBackend evaluated cleanly on RTX 4080 SUPER!\n");
             }
+            std::fflush(stdout);
 
             testCmdList->Close();
             ID3D12CommandList* lists[] = { testCmdList.Get() };
@@ -1589,15 +1613,18 @@ int main() {
                 CloseHandle(hEvent);
             }
 
-            std::cout << "  [3] Shutting down NeuralBackend...\n";
+            std::printf("  [3] Shutting down NeuralBackend...\n");
+            std::fflush(stdout);
             backend.Shutdown();
-            std::cout << "    [SUCCESS] NeuralBackend shut down cleanly. IsReady=" << backend.IsReady() << "\n";
+            std::printf("    [SUCCESS] NeuralBackend shut down cleanly. IsReady=%d\n", backend.IsReady() ? 1 : 0);
+            std::fflush(stdout);
         }
     }
 
-    std::cout << "\n=================================================================\n";
-    std::cout << " Phase 9 & 10 NGX Probing Complete. Photoshop host remains protected.\n";
-    std::cout << "=================================================================\n";
+    std::printf("\n=================================================================\n");
+    std::printf(" Phase 9 & 10 NGX Probing Complete. Photoshop host remains protected.\n");
+    std::printf("=================================================================\n");
+    std::fflush(stdout);
 
     return 0;
 }

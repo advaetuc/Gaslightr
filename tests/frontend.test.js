@@ -361,3 +361,28 @@ test("local enhancement mode executes CPU 7x7 filter and blends on top of d3d12-
   assert.ok(h.calls.some(x => x[0] === "historyName" && x[1] === "Gaslightr enhancement"));
   assert.deepEqual(h.calls.at(-1), ["resume", true]);
 });
+
+test("multi-tile execution passes correct global canvas dimensions and subrect offsets to native addon", async () => {
+  const h = host({ width: 1950 });
+  const tileCalls = [];
+  h.api.capabilities = () => ({ protocol: 1, detailOnly: false, sdkMessaging: true, neuralInference: true, executionMode: "d3d12-neural-dlssd" });
+  h.api.processTile = async (input, options) => {
+    tileCalls.push(options);
+    return input.slice();
+  };
+  await h.bridge.apply({ mode: "neural" });
+  assert.equal(tileCalls.length, 3);
+  // Layer bounds: left: -3, right: 1947, width = 1950, height = 3
+  for (const opt of tileCalls) {
+    assert.equal(opt.canvasWidth, 1950);
+    assert.equal(opt.canvasHeight, 3);
+    assert.equal(opt.mode, "neural");
+    assert.equal(typeof opt.tileX, "number");
+    assert.equal(typeof opt.tileY, "number");
+    assert.equal(opt.tileY, 0);
+  }
+  // Offsets relative to layer left=-3
+  assert.equal(tileCalls[0].tileX, 0);
+  assert.ok(tileCalls[1].tileX > 0);
+  assert.ok(tileCalls[2].tileX > tileCalls[1].tileX);
+});

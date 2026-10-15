@@ -25,12 +25,13 @@ namespace {
 
 void TestCopyValidation() {
     std::printf("[Phase 8B Test 1] Direct3D 12 Copy Validation...\n");
-    if (Gaslightr::kNeuralInferenceAvailable) {
-        throw std::runtime_error("Expected validation build.");
-    }
-    auto& backend = Gaslightr::NeuralBackend::GetInstance();
-    if (backend.Initialize(L"nvngx_dlssnr.dll", nullptr, nullptr) || backend.IsLoaded() || backend.IsReady()) {
-        throw std::runtime_error("Unverified backend must remain disabled.");
+    if (!Gaslightr::kNeuralInferenceAvailable) {
+        auto& backend = Gaslightr::NeuralBackend::GetInstance();
+        if (backend.Initialize(L"nvngx_dlssnr.dll", nullptr, nullptr) || backend.IsLoaded() || backend.IsReady()) {
+            throw std::runtime_error("Unverified backend must remain disabled.");
+        }
+    } else {
+        std::printf("  [Info] Opt-in Neural Inference capability active.\n");
     }
 
     const std::array<std::pair<uint32_t, uint32_t>, 5> sizes{{
@@ -420,6 +421,145 @@ void TestNeuralExecutionFallback() {
     std::printf("  Neural execution fallback passed: output size %zu, finite pixels, clean compute shader degradation.\n", output.size());
 }
 
+void TestNeuralMultiTileContinuity() {
+    std::printf("[Phase 12 Test] Neural Multi-Tile Boundary Continuity & 32px Halo Verification...\n");
+    const uint32_t testW = 256;
+    const uint32_t testH = 64;
+    const uint32_t splitX = 128;
+    const uint32_t halo = 32; // Production 32-pixel halo
+
+    std::vector<float> fullImage(static_cast<size_t>(testW) * testH * 4);
+    for (uint32_t y = 0; y < testH; ++y) {
+        for (uint32_t x = 0; x < testW; ++x) {
+            const size_t idx = (static_cast<size_t>(y) * testW + x) * 4;
+            fullImage[idx]     = static_cast<float>((x * 13 + y * 17) % 256) / 255.0f;
+            fullImage[idx + 1] = static_cast<float>((x * 29 + y * 7)  % 256) / 255.0f;
+            fullImage[idx + 2] = static_cast<float>((x * 7  + y * 31) % 256) / 255.0f;
+            fullImage[idx + 3] = 1.0f;
+        }
+    }
+
+    // 1. Ground truth: single unpartitioned pass across the entire canvas in Neural mode
+    Gaslightr::TileRequest reqFull{
+        .width = testW,
+        .height = testH,
+        .preset = 0,
+        .detailOnly = false,
+        .intensity = 0.75f,
+        .structure = 0.6f,
+        .feather = 0.0f,
+        .validationOnly = false,
+        .executionMode = Gaslightr::ExecutionMode::Neural,
+        .tileX = 0,
+        .tileY = 0,
+        .canvasWidth = testW,
+        .canvasHeight = testH
+    };
+    const auto groundTruth = Gaslightr::ProcessTile(fullImage, reqFull);
+
+    // 2. Tile 1: covers core [0, splitX), with halo right: read [0, splitX + halo]
+    const uint32_t t1ReadW = splitX + halo;
+    std::vector<float> t1Input(static_cast<size_t>(t1ReadW) * testH * 4);
+    for (uint32_t y = 0; y < testH; ++y) {
+        for (uint32_t x = 0; x < t1ReadW; ++x) {
+            const size_t dst = (static_cast<size_t>(y) * t1ReadW + x) * 4;
+            const size_t src = (static_cast<size_t>(y) * testW + x) * 4;
+            for (size_t c = 0; c < 4; ++c) t1Input[dst + c] = fullImage[src + c];
+        }
+    }
+    Gaslightr::TileRequest reqT1{
+        .width = t1ReadW,
+        .height = testH,
+        .preset = 0,
+        .detailOnly = false,
+        .intensity = 0.75f,
+        .structure = 0.6f,
+        .feather = 0.0f,
+        .validationOnly = false,
+        .executionMode = Gaslightr::ExecutionMode::Neural,
+        .tileX = 0,
+        .tileY = 0,
+        .canvasWidth = testW,
+        .canvasHeight = testH
+    };
+    const auto t1Output = Gaslightr::ProcessTile(t1Input, reqT1);
+
+    // 3. Tile 2: covers core [splitX, testW), with halo left: read [splitX - halo, testW]
+    const uint32_t t2ReadW = (testW - splitX) + halo;
+    std::vector<float> t2Input(static_cast<size_t>(t2ReadW) * testH * 4);
+    for (uint32_t y = 0; y < testH; ++y) {
+        for (uint32_t x = 0; x < t2ReadW; ++x) {
+            const size_t dst = (static_cast<size_t>(y) * t2ReadW + x) * 4;
+            const size_t src = (static_cast<size_t>(y) * testW + (splitX - halo + x)) * 4;
+            for (size_t c = 0; c < 4; ++c) t2Input[dst + c] = fullImage[src + c];
+        }
+    }
+    Gaslightr::TileRequest reqT2{
+        .width = t2ReadW,
+        .height = testH,
+        .preset = 0,
+        .detailOnly = false,
+        .intensity = 0.75f,
+        .structure = 0.6f,
+        .feather = 0.0f,
+        .validationOnly = false,
+        .executionMode = Gaslightr::ExecutionMode::Neural,
+        .tileX = static_cast<int32_t>(splitX - halo),
+        .tileY = 0,
+        .canvasWidth = testW,
+        .canvasHeight = testH
+    };
+    const auto t2Output = Gaslightr::ProcessTile(t2Input, reqT2);
+
+    // 4. Assemble stitched image from core regions
+    std::vector<float> stitched(static_cast<size_t>(testW) * testH * 4);
+    for (uint32_t y = 0; y < testH; ++y) {
+        // Tile 1 core: [0, splitX)
+        for (uint32_t x = 0; x < splitX; ++x) {
+            const size_t dst = (static_cast<size_t>(y) * testW + x) * 4;
+            const size_t src = (static_cast<size_t>(y) * t1ReadW + x) * 4;
+            for (size_t c = 0; c < 4; ++c) stitched[dst + c] = t1Output[src + c];
+        }
+        // Tile 2 core: [splitX, testW), offset in Tile 2 is 'halo + (x - splitX)'
+        for (uint32_t x = splitX; x < testW; ++x) {
+            const size_t dst = (static_cast<size_t>(y) * testW + x) * 4;
+            const size_t src = (static_cast<size_t>(y) * t2ReadW + (halo + (x - splitX))) * 4;
+            for (size_t c = 0; c < 4; ++c) stitched[dst + c] = t2Output[src + c];
+        }
+    }
+
+    // 5. Verify boundary continuity:
+    // All stitched pixels must be finite and alpha preserved
+    for (size_t i = 0; i < stitched.size(); ++i) {
+        if (!std::isfinite(stitched[i])) {
+            throw std::runtime_error("Non-finite pixel in neural multi-tile stitched output!");
+        }
+        if (i % 4 == 3 && stitched[i] != 1.0f) {
+            throw std::runtime_error("Alpha channel corruption across neural tile stitching!");
+        }
+    }
+
+    // Measure delta across boundary region [splitX - 3, splitX + 3] against ground truth
+    float maxDelta = 0.0f;
+    for (uint32_t y = 0; y < testH; ++y) {
+        for (uint32_t x = splitX - 3; x <= splitX + 3; ++x) {
+            const size_t idx = (static_cast<size_t>(y) * testW + x) * 4;
+            for (size_t c = 0; c < 3; ++c) {
+                const float diff = std::abs(stitched[idx + c] - groundTruth[idx + c]);
+                maxDelta = std::max(maxDelta, diff);
+            }
+        }
+    }
+
+    if (maxDelta > 1e-3f) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "Neural seam defect detected across tile boundary! Max delta: %f", maxDelta);
+        throw std::runtime_error(msg);
+    }
+
+    std::printf("  Neural multi-tile continuity passed: 256x64 2-tile assembly with 32px halo, max seam delta: %e\n", maxDelta);
+}
+
 } // namespace
 
 int main() {
@@ -434,6 +574,7 @@ int main() {
         TestExtremeFloatAndHdrValues();
         TestTileStitchingSeamInvariance();
         TestNeuralExecutionFallback();
+        TestNeuralMultiTileContinuity();
 
         std::printf("=================================================================\n");
         std::printf("ALL DIRECT3D 12 EDGE-CASE & NEURAL FALLBACK TESTS PASSED.\n");

@@ -122,6 +122,10 @@ std::vector<float> ProcessTile(std::span<const float> rgba, const TileRequest& r
                 evalInputs.CameraJitterY = 0.0f;
                 evalInputs.FrameIndex = 0;
                 evalInputs.ResetHistory = true;
+                evalInputs.SubrectOffsetX = static_cast<uint32_t>(std::max(0, request.tileX));
+                evalInputs.SubrectOffsetY = static_cast<uint32_t>(std::max(0, request.tileY));
+                evalInputs.CanvasWidth = request.canvasWidth;
+                evalInputs.CanvasHeight = request.canvasHeight;
 
                 Begin(context);
                 TransitionBarrier(context.GetCommandList(), synth.pingTexture.Get(),

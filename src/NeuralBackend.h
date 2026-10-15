@@ -13,6 +13,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 #include <windows.h>
 #include <d3d12.h>
 
@@ -42,6 +43,7 @@ public:
     bool IsLoaded() const noexcept { return m_loaded.load(std::memory_order_acquire); }
     bool IsReady() const noexcept { return m_ready.load(std::memory_order_acquire); }
     const std::wstring& GetLastError() const noexcept { return m_lastError; }
+    std::vector<std::string> GetRecentLogEntries(size_t count = 50);
 
 private:
     NeuralBackend() = default;

@@ -77,11 +77,16 @@ function createBridge(ps, loadNative) {
       const isNeural = config.mode === "neural";
       const isValidation = config.mode === "validation" || (!isNeural && config.mode !== "enhancement" && api.capabilities().executionMode === "d3d12-validation-copy");
       const mode = config.mode || (isValidation ? "validation" : "enhancement");
+      const canvasWidth = src.bounds.right - src.bounds.left;
+      const canvasHeight = src.bounds.bottom - src.bounds.top;
+      const tileX = read.left - src.bounds.left;
+      const tileY = read.top - src.bounds.top;
       const output = await api.processTile(input, {
         width, height, preset: config.preset, detailOnly: config.detailOnly,
         intensity: config.intensity, structure: config.structure,
         validationOnly: isValidation,
-        mode
+        mode,
+        tileX, tileY, canvasWidth, canvasHeight
       });
       checkCancel(context);
       if (!(output instanceof Float32Array) || output.length !== input.length)

@@ -23,6 +23,10 @@ struct TileRequest {
     float feather = 0.0f;
     bool validationOnly = true;
     ExecutionMode executionMode = ExecutionMode::Enhancement;
+    int32_t tileX = 0;
+    int32_t tileY = 0;
+    uint32_t canvasWidth = 0;
+    uint32_t canvasHeight = 0;
 };
 inline void ValidateTile(std::span<const float> rgba, const TileRequest& request) {
     if (request.width == 0 || request.height == 0 || request.width > 2048 || request.height > 2048)
