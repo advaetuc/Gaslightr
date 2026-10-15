@@ -30,7 +30,9 @@
         <img id="preview" class="preview-layer preview-after" alt="Enhanced preview" draggable="false">
         <img id="previewBefore" class="preview-layer preview-before" alt="Original preview" draggable="false">
         <div id="previewDivider" class="preview-divider">
-          <div class="preview-handle" title="Drag to compare before and after">
+          <div class="preview-handle" id="previewHandle" role="slider" tabindex="0"
+               aria-label="Before and after split comparison" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100"
+               title="Drag or use Left/Right arrow keys to compare">
             <span class="handle-arrow">◀</span>
             <span class="handle-grip">❙</span>
             <span class="handle-arrow">▶</span>
@@ -39,7 +41,7 @@
         <span class="preview-badge badge-before">Before</span>
         <span class="preview-badge badge-after">After</span>
       </div>
-      <sp-body size="s" class="preview-caption">Drag divider to compare · full-resolution center crop</sp-body>
+      <sp-body size="s" class="preview-caption">Drag divider or click to compare · full-resolution center crop</sp-body>
     </section>
 
     <!-- Section 3: Enhancement Parameters -->
@@ -81,14 +83,21 @@
       </div>
     </section>
 
-    <!-- Section 5: Diagnostic Logs -->
-    <section class="section-card diagnostics-section">
-      <div class="diagnostics-header">
-        <label class="field-label" for="status">Diagnostics & Response</label>
-        <sp-button id="nativeCheck" variant="secondary" size="s">Check native bridge</sp-button>
+    <!-- Section 5: Diagnostic Logs Accordion -->
+    <details class="section-card diagnostics-card" id="diagnosticsCard">
+      <summary class="diagnostics-summary">
+        <span class="summary-title">Diagnostics & Host Logs</span>
+        <span class="summary-badge" id="diagnosticsBadge">Idle</span>
+      </summary>
+      <div class="diagnostics-content">
+        <div class="diagnostics-toolbar">
+          <sp-button id="nativeCheck" variant="secondary" size="s">Check bridge</sp-button>
+          <sp-button id="queryCaps" variant="secondary" size="s">Inspect host</sp-button>
+          <sp-button id="clearStatus" variant="secondary" size="s">Clear</sp-button>
+        </div>
+        <textarea id="status" readonly aria-label="Latest response" aria-live="polite">Ready</textarea>
       </div>
-      <textarea id="status" readonly aria-label="Latest response" aria-live="polite">Ready</textarea>
-    </section>
+    </details>
 
   </div>
   <script src="index.jsx"></script>

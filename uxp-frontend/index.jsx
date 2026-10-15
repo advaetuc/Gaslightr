@@ -16,11 +16,32 @@ const element = id => document.getElementById(id);
 let preview = null, split = 0.5, timer = null, revision = 0, pendingPreview = false;
 let previewUrlAfter = null, previewUrlBefore = null, isDragging = false;
 
-const status = message => {
+const status = (message, badge = null) => {
   const el = element("status");
   if (el) {
-    el.value = String(message);
-    el.scrollTop = 0;
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] ${message}`;
+    if (!el.value || el.value === "Ready") {
+      el.value = formatted;
+    } else {
+      el.value += `\n${formatted}`;
+    }
+    el.scrollTop = el.scrollHeight;
+  }
+  const badgeEl = element("diagnosticsBadge");
+  if (badgeEl) {
+    if (badge) {
+      badgeEl.textContent = badge;
+    } else {
+      const lower = String(message).toLowerCase();
+      if (lower.includes("fail") || lower.includes("error") || lower.includes("rejected")) {
+        badgeEl.textContent = "Error";
+      } else if (lower.includes("running") || lower.includes("rendering") || lower.includes("enhancing")) {
+        badgeEl.textContent = "Busy";
+      } else if (lower.includes("created") || lower.includes("verified") || lower.includes("ready")) {
+        badgeEl.textContent = "Done";
+      }
+    }
   }
   console.log(`[Gaslightr] ${new Date().toISOString()} ${message}`);
 };
@@ -133,10 +154,14 @@ function updateDivider() {
   const pct = Math.max(0, Math.min(100, split * 100));
   const divider = element("previewDivider");
   const beforeImg = element("previewBefore");
+  const handle = element("previewHandle");
   if (divider) divider.style.left = `${pct}%`;
   if (beforeImg) {
     beforeImg.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
     beforeImg.style.webkitClipPath = `inset(0 ${100 - pct}% 0 0)`;
+  }
+  if (handle) {
+    handle.setAttribute("aria-valuenow", String(Math.round(pct)));
   }
 }
 
@@ -221,17 +246,65 @@ async function run(apply) {
 }
 
 element("refresh").addEventListener("click", () => run(false));
-element("nativeCheck").addEventListener("click", async () => {
-  if (bridge.isBusy()) return;
-  element("nativeCheck").disabled = true;
-  try {
-    status(await bridge.checkNative());
-  } catch (error) {
-    status(error.message || String(error));
-  } finally {
-    element("nativeCheck").disabled = false;
-  }
-});
+
+const nativeCheckBtn = element("nativeCheck");
+if (nativeCheckBtn) {
+  nativeCheckBtn.addEventListener("click", async () => {
+    if (bridge.isBusy()) return;
+    nativeCheckBtn.disabled = true;
+    status("Running native boundary diagnostics…", "Testing");
+    try {
+      const report = await bridge.checkNative();
+      status(typeof report === "object" ? JSON.stringify(report, null, 2) : String(report), "Bridge OK");
+    } catch (error) {
+      status(`Native check failed: ${error.message || String(error)}`, "Error");
+    } finally {
+      nativeCheckBtn.disabled = false;
+    }
+  });
+}
+
+const queryCapsBtn = element("queryCaps");
+if (queryCapsBtn) {
+  queryCapsBtn.addEventListener("click", async () => {
+    if (bridge.isBusy()) return;
+    queryCapsBtn.disabled = true;
+    status("Querying native backend capabilities…", "Inspecting");
+    try {
+      const caps = await bridge.capabilities();
+      nativeCapabilities = caps;
+      updateModeUI();
+      const details = [
+        "--- Host & Engine Diagnostics ---",
+        `Protocol Version : v${caps.protocol || 1}`,
+        `Execution Mode   : ${caps.executionMode || "unknown"}`,
+        `Neural Inference : ${caps.neuralInference ? "AVAILABLE (DLSS-D active)" : `DISABLED (${caps.neuralInferenceReason || "Gate inactive"})`}`,
+        `Detail-Only Mode : ${caps.detailOnly ? "SUPPORTED" : `UNAVAILABLE (${caps.detailOnlyReason || "No interop"})`}`,
+        `SDK Messaging    : ${caps.sdkMessaging ? "CONNECTED" : "INACTIVE"}`,
+        `Host Platform    : Photoshop UXP`,
+        "---------------------------------"
+      ].join("\n");
+      status(details, caps.neuralInference ? "Neural Ready" : "Host Ready");
+    } catch (error) {
+      status(`Failed to inspect host: ${error.message || String(error)}`, "Error");
+    } finally {
+      queryCapsBtn.disabled = false;
+    }
+  });
+}
+
+const clearStatusBtn = element("clearStatus");
+if (clearStatusBtn) {
+  clearStatusBtn.addEventListener("click", () => {
+    const el = element("status");
+    if (el) el.value = "Ready";
+    const badgeEl = element("diagnosticsBadge");
+    if (badgeEl) {
+      badgeEl.textContent = "Idle";
+      badgeEl.style.color = "";
+    }
+  });
+}
 
 element("apply").addEventListener("click", () => run(true));
 element("cancel").addEventListener("click", () => {
@@ -242,10 +315,12 @@ element("cancel").addEventListener("click", () => {
   status("Cancelling after the current tile…");
 });
 
-// Pointer drag interaction with setPointerCapture
+// Pointer drag interaction with setPointerCapture and window-level tracking
 const stage = element("previewStage");
+const handle = element("previewHandle");
+
 function setSplitFromPointer(clientX) {
-  if (!stage || !preview) return;
+  if (!stage) return;
   const rect = stage.getBoundingClientRect();
   if (rect.width <= 0) return;
   const clampedX = Math.max(0, Math.min(rect.width, clientX - rect.left));
@@ -254,31 +329,55 @@ function setSplitFromPointer(clientX) {
 }
 
 if (stage) {
-  stage.addEventListener("pointerdown", event => {
-    if (!preview) return;
+  const onPointerDown = event => {
     isDragging = true;
+    if (handle) handle.classList.add("dragging");
     try {
       stage.setPointerCapture(event.pointerId);
     } catch (_) {}
     setSplitFromPointer(event.clientX);
-  });
+    event.preventDefault();
+  };
 
-  stage.addEventListener("pointermove", event => {
+  const onPointerMove = event => {
     if (!isDragging) return;
     setSplitFromPointer(event.clientX);
-  });
+  };
 
-  const endDrag = event => {
+  const onPointerUp = event => {
     if (!isDragging) return;
     isDragging = false;
+    if (handle) handle.classList.remove("dragging");
     try {
-      if (event && event.pointerId) stage.releasePointerCapture(event.pointerId);
+      if (event && event.pointerId && stage.hasPointerCapture && stage.hasPointerCapture(event.pointerId)) {
+        stage.releasePointerCapture(event.pointerId);
+      }
     } catch (_) {}
   };
 
-  stage.addEventListener("pointerup", endDrag);
-  stage.addEventListener("pointercancel", endDrag);
-  window.addEventListener("pointerup", endDrag);
+  stage.addEventListener("pointerdown", onPointerDown);
+  stage.addEventListener("pointermove", onPointerMove);
+  stage.addEventListener("pointerup", onPointerUp);
+  stage.addEventListener("pointercancel", onPointerUp);
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+}
+
+// Keyboard navigation on preview handle
+if (handle) {
+  handle.addEventListener("keydown", event => {
+    let delta = 0;
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") delta = -0.05;
+    else if (event.key === "ArrowRight" || event.key === "ArrowUp") delta = 0.05;
+    else if (event.key === "Home") { split = 0; delta = null; }
+    else if (event.key === "End") { split = 1; delta = null; }
+    if (delta !== 0 || delta === null) {
+      if (delta !== null) split = Math.max(0, Math.min(1, split + delta));
+      updateDivider();
+      event.preventDefault();
+    }
+  });
 }
 
 const previewAfterImg = element("preview");

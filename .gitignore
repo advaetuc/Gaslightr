@@ -3,4 +3,5 @@
 /vendor/
 /scratch/
 *.pdb
+*.uxpaddon
 CODEX_PROMPT.md

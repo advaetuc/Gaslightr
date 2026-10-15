@@ -9,8 +9,8 @@
   "requiredPermissions": { "enableAddon": true, "localFileSystem": "plugin" },
   "entrypoints": [{
     "type": "panel", "id": "gaslightr", "label": { "default": "Gaslightr" },
-    "minimumSize": { "width": 340, "height": 620 },
-    "preferredDockedSize": { "width": 380, "height": 780 },
-    "preferredFloatingSize": { "width": 420, "height": 840 }
+    "minimumSize": { "width": 320, "height": 480 },
+    "preferredDockedSize": { "width": 360, "height": 680 },
+    "preferredFloatingSize": { "width": 400, "height": 780 }
   }]
 }
