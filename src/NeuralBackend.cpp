@@ -1,5 +1,6 @@
 #include "NeuralBackend.h"
 #include "BackendCapabilities.h"
+#include <windows.h>
 #include <wintrust.h>
 #include <softpub.h>
 #include <wrl/client.h>
@@ -227,28 +228,57 @@ private:
     ~NeuralLogger() = default;
 
     static std::filesystem::path ResolveLogPath() {
+        // 1. Try module directory if writable (e.g. plugin directory in AppData)
         wchar_t modPath[MAX_PATH]{};
         HMODULE hModule = nullptr;
         if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                reinterpret_cast<LPCWSTR>(&ResolveLogPath), &hModule) && hModule) {
             if (GetModuleFileNameW(hModule, modPath, MAX_PATH) > 0) {
-                std::filesystem::path dir = std::filesystem::path(modPath).parent_path();
-                return dir / L"gaslightr_neural.log";
+                std::filesystem::path candidate = std::filesystem::path(modPath).parent_path() / L"gaslightr_neural.log";
+                FILE* testFp = nullptr;
+                if (_wfopen_s(&testFp, candidate.c_str(), L"a") == 0 && testFp) {
+                    fclose(testFp);
+                    return candidate;
+                }
             }
         }
+
+        // 2. Fallback to %TEMP%\gaslightr_neural.log if running from a protected program directory
+        wchar_t tempPath[MAX_PATH]{};
+        DWORD len = GetTempPathW(MAX_PATH, tempPath);
+        if (len > 0 && len < MAX_PATH) {
+            std::filesystem::path tempCandidate = std::filesystem::path(tempPath) / L"gaslightr_neural.log";
+            FILE* testFp = nullptr;
+            if (_wfopen_s(&testFp, tempCandidate.c_str(), L"a") == 0 && testFp) {
+                fclose(testFp);
+                return tempCandidate;
+            }
+        }
+
+        // 3. Fallback to local working directory
         return L"gaslightr_neural.log";
     }
 
     void WriteToFile(const std::string& line) {
         FILE* fp = nullptr;
-        errno_t err = _wfopen_s(&fp, m_logPath.c_str(), L"a");
-        if (err == 0 && fp) {
+        if (!m_logPath.empty() && _wfopen_s(&fp, m_logPath.c_str(), L"a") == 0 && fp) {
             fputs(line.c_str(), fp);
             fclose(fp);
             return;
         }
-        err = fopen_s(&fp, "gaslightr_neural.log", "a");
-        if (err == 0 && fp) {
+
+        // Fallback to %TEMP% if primary path failed to open at runtime
+        wchar_t tempPath[MAX_PATH]{};
+        if (GetTempPathW(MAX_PATH, tempPath) > 0) {
+            std::filesystem::path tempFile = std::filesystem::path(tempPath) / L"gaslightr_neural.log";
+            if (_wfopen_s(&fp, tempFile.c_str(), L"a") == 0 && fp) {
+                fputs(line.c_str(), fp);
+                fclose(fp);
+                return;
+            }
+        }
+
+        if (fopen_s(&fp, "gaslightr_neural.log", "a") == 0 && fp) {
             fputs(line.c_str(), fp);
             fclose(fp);
         }

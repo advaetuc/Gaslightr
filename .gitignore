@@ -4,4 +4,6 @@
 /scratch/
 *.pdb
 *.uxpaddon
+*.ccx
+/dist/
 CODEX_PROMPT.md
